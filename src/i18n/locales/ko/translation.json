@@ -11,6 +11,7 @@
   "sidebar": {
     "general": "일반",
     "models": "모델",
+    "phrases": "Phrases",
     "advanced": "고급",
     "postProcessing": "후처리",
     "history": "히스토리",

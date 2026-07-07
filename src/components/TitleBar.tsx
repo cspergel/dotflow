@@ -27,7 +27,10 @@ interface TitleBarProps {
   isDictating: boolean;
 }
 
-export const TitleBar: React.FC<TitleBarProps> = ({ onCompact, isDictating }) => {
+export const TitleBar: React.FC<TitleBarProps> = ({
+  onCompact,
+  isDictating,
+}) => {
   const { settings } = useSettings();
   const key = prettyKey(settings?.bindings?.transcribe?.current_binding);
   const win = getCurrentWindow();
@@ -50,7 +53,9 @@ export const TitleBar: React.FC<TitleBarProps> = ({ onCompact, isDictating }) =>
             }`}
           />
         </span>
-        <span className={`text-xs ${isDictating ? "text-logo-primary font-medium" : "text-text/55"}`}>
+        <span
+          className={`text-xs ${isDictating ? "text-logo-primary font-medium" : "text-text/55"}`}
+        >
           {isDictating ? "Listening…" : "Ready to dictate"}
         </span>
         {key && !isDictating && (
@@ -64,7 +69,11 @@ export const TitleBar: React.FC<TitleBarProps> = ({ onCompact, isDictating }) =>
         <button onClick={onCompact} title="Compact mode" className={ctrlBtn}>
           <Minimize2 size={14} />
         </button>
-        <button onClick={() => win.minimize()} title="Minimize" className={ctrlBtn}>
+        <button
+          onClick={() => win.minimize()}
+          title="Minimize"
+          className={ctrlBtn}
+        >
           <Minus size={16} />
         </button>
         <button

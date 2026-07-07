@@ -1,3 +1,4 @@
+/* eslint-disable i18next/no-literal-string -- brand wordmark, never translated. */
 import React from "react";
 
 // DotFlow wordmark — "Dot" in the text color + "Flow" in the brand accent, led by a filled brand dot.

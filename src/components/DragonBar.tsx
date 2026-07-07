@@ -28,7 +28,10 @@ interface DragonBarProps {
   isDictating: boolean;
 }
 
-export const DragonBar: React.FC<DragonBarProps> = ({ onExpand, isDictating }) => {
+export const DragonBar: React.FC<DragonBarProps> = ({
+  onExpand,
+  isDictating,
+}) => {
   const { settings } = useSettings();
   const key = prettyKey(settings?.bindings?.transcribe?.current_binding);
   const pushToTalk = settings?.push_to_talk ?? false;
@@ -41,7 +44,9 @@ export const DragonBar: React.FC<DragonBarProps> = ({ onExpand, isDictating }) =
       {/* mic puck — amber on standby, green while dictating */}
       <div
         className={`flex items-center justify-center h-7 w-7 rounded-lg shrink-0 transition-colors pointer-events-none ${
-          isDictating ? "bg-logo-primary text-white" : "bg-amber-400/20 text-amber-500"
+          isDictating
+            ? "bg-logo-primary text-white"
+            : "bg-amber-400/20 text-amber-500"
         }`}
       >
         <Mic size={14} />
@@ -57,7 +62,9 @@ export const DragonBar: React.FC<DragonBarProps> = ({ onExpand, isDictating }) =
         <span
           className={`h-1.5 w-1.5 rounded-full shrink-0 ${isDictating ? "bg-logo-primary" : "bg-amber-400"}`}
         />
-        <span className={`text-[11px] truncate ${isDictating ? "text-logo-primary font-medium" : "text-text/60"}`}>
+        <span
+          className={`text-[11px] truncate ${isDictating ? "text-logo-primary font-medium" : "text-text/60"}`}
+        >
           {isDictating ? "Listening…" : "Ready to dictate"}
         </span>
       </span>

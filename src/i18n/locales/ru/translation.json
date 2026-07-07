@@ -11,6 +11,7 @@
   "sidebar": {
     "general": "Общие",
     "models": "Модели",
+    "phrases": "Phrases",
     "advanced": "Продвинутые",
     "postProcessing": "Постобработка",
     "history": "История",

@@ -1,3 +1,4 @@
+/* eslint-disable i18next/no-literal-string -- DotFlow Phrases UI is English-first (not yet localized). */
 import React, { useCallback, useEffect, useState } from "react";
 import { Plus, Pencil, Trash2, Check, X } from "lucide-react";
 import { commands, type PhraseRecord } from "../../../bindings";
@@ -54,7 +55,11 @@ export const PhrasesSettings: React.FC = () => {
   };
 
   const startEdit = (p: PhraseRecord) => {
-    setDraft({ key: p.key, aliasesText: p.aliases.join(", "), expansion: p.expansion });
+    setDraft({
+      key: p.key,
+      aliasesText: p.aliases.join(", "),
+      expansion: p.expansion,
+    });
     setEditing(p.id);
   };
 
@@ -76,7 +81,12 @@ export const PhrasesSettings: React.FC = () => {
     const res =
       editing === "new"
         ? await commands.addPhrase(key, aliases, expansion)
-        : await commands.updatePhrase(editing as number, key, aliases, expansion);
+        : await commands.updatePhrase(
+            editing as number,
+            key,
+            aliases,
+            expansion,
+          );
     setSaving(false);
     if (res.status === "ok") {
       cancel();
@@ -99,7 +109,9 @@ export const PhrasesSettings: React.FC = () => {
   const editor = (
     <div className="flex flex-col gap-3 p-3 rounded-lg border border-logo-primary/40 bg-logo-primary/5">
       <div className="flex flex-col gap-1">
-        <label className="text-xs opacity-70">Dot trigger — type it as .key (optional)</label>
+        <label className="text-xs opacity-70">
+          Dot trigger — type it as .key (optional)
+        </label>
         <Input
           variant="compact"
           placeholder="fu"
@@ -133,7 +145,12 @@ export const PhrasesSettings: React.FC = () => {
             <X size={14} /> Cancel
           </span>
         </Button>
-        <Button variant="primary" size="sm" onClick={save} disabled={!canSave || saving}>
+        <Button
+          variant="primary"
+          size="sm"
+          onClick={save}
+          disabled={!canSave || saving}
+        >
           <span className="flex items-center gap-1">
             <Check size={14} /> {saving ? "Saving…" : "Save"}
           </span>
@@ -147,12 +164,15 @@ export const PhrasesSettings: React.FC = () => {
       <SettingsGroup title="Phrase library">
         <div className="flex flex-col gap-3 p-1">
           <p className="text-sm opacity-70">
-            Create your own dictation inserts: a trigger you speak (or a dot shortcut you type) drops in a
-            saved block of text. Edits take effect on your next dictation — no restart.
+            Create your own dictation inserts: a trigger you speak (or a dot
+            shortcut you type) drops in a saved block of text. Edits take effect
+            on your next dictation — no restart.
           </p>
 
           {error && (
-            <div className="text-sm text-red-400 bg-red-500/10 rounded-md px-3 py-2">{error}</div>
+            <div className="text-sm text-red-400 bg-red-500/10 rounded-md px-3 py-2">
+              {error}
+            </div>
           )}
 
           {editing === "new" ? (
@@ -170,7 +190,9 @@ export const PhrasesSettings: React.FC = () => {
           {loading ? (
             <p className="text-sm opacity-60">Loading…</p>
           ) : phrases.length === 0 && editing !== "new" ? (
-            <p className="text-sm opacity-60">No phrases yet — add your first one above.</p>
+            <p className="text-sm opacity-60">
+              No phrases yet — add your first one above.
+            </p>
           ) : (
             <div className="flex flex-col gap-2">
               {phrases.map((p) =>
@@ -203,7 +225,12 @@ export const PhrasesSettings: React.FC = () => {
                       </p>
                     </div>
                     <div className="flex gap-1 shrink-0">
-                      <Button variant="ghost" size="sm" onClick={() => startEdit(p)} title="Edit">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => startEdit(p)}
+                        title="Edit"
+                      >
                         <Pencil size={14} />
                       </Button>
                       <Button

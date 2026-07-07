@@ -306,7 +306,10 @@ function App() {
     return (
       <div dir={direction} className="h-screen bg-background">
         <Toaster theme="system" />
-        <DragonBar onExpand={() => applyViewMode("full")} isDictating={isDictating} />
+        <DragonBar
+          onExpand={() => applyViewMode("full")}
+          isDictating={isDictating}
+        />
       </div>
     );
   }
@@ -330,7 +333,10 @@ function App() {
       />
       <WhatsNewGate />
       {/* Frameless custom titlebar: drag, dictation status, window controls + Compact toggle */}
-      <TitleBar onCompact={() => applyViewMode("bar")} isDictating={isDictating} />
+      <TitleBar
+        onCompact={() => applyViewMode("bar")}
+        isDictating={isDictating}
+      />
       {/* Main content area that takes remaining space */}
       <div className="flex-1 flex overflow-hidden">
         <Sidebar

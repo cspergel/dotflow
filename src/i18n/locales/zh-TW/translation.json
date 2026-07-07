@@ -11,6 +11,7 @@
   "sidebar": {
     "general": "一般",
     "models": "模型",
+    "phrases": "Phrases",
     "advanced": "進階",
     "postProcessing": "後處理",
     "history": "歷史紀錄",
