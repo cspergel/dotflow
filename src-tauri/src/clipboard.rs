@@ -5,12 +5,40 @@ use crate::settings::{get_settings, AutoSubmitKey, ClipboardHandling, PasteMetho
 use enigo::{Direction, Enigo, Key, Keyboard};
 use log::info;
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tauri::{AppHandle, Manager};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 
 #[cfg(target_os = "linux")]
 use crate::utils::{is_kde_wayland, is_wayland};
+
+/// DotFlow: raised WHILE DotFlow is injecting text (dictation streaming, the finalize paste, or the typed
+/// expander's own emit). The typed-expander keyboard monitor checks this and IGNORES all input while it is
+/// raised, so DotFlow's own synthetic keystrokes/paste can never re-trigger an expansion (no feedback loop).
+/// It is only ever READ by the (opt-in, default-off) typed expander, so raising it here is a no-op for the
+/// existing dictation path.
+static DOTFLOW_INJECTING: AtomicBool = AtomicBool::new(false);
+
+/// True while DotFlow is mid-injection. Read by the typed-expander detector to suppress self-triggering.
+pub fn is_injecting() -> bool {
+    DOTFLOW_INJECTING.load(Ordering::SeqCst)
+}
+
+/// RAII guard: raises the injecting flag for the duration of an injection and clears it on drop (even on
+/// early return / error). Create one at the top of every function that synthesizes input.
+struct InjectGuard;
+impl InjectGuard {
+    fn new() -> Self {
+        DOTFLOW_INJECTING.store(true, Ordering::SeqCst);
+        InjectGuard
+    }
+}
+impl Drop for InjectGuard {
+    fn drop(&mut self) {
+        DOTFLOW_INJECTING.store(false, Ordering::SeqCst);
+    }
+}
 
 /// Pastes text using the clipboard: saves current content, writes text, sends paste keystroke, restores clipboard.
 fn paste_via_clipboard(
@@ -592,6 +620,7 @@ fn should_send_auto_submit(auto_submit: bool, paste_method: PasteMethod) -> bool
 /// processing that `paste` does — for callers that have already run the deterministic pipeline (phrase
 /// expansion + punctuation) and just need the finished text placed in the focused field.
 pub fn inject_text_raw(text: &str, app_handle: &AppHandle) -> Result<(), String> {
+    let _inject_guard = InjectGuard::new();
     let enigo_state = app_handle
         .try_state::<EnigoState>()
         .ok_or("Enigo state not initialized")?;
@@ -641,6 +670,7 @@ pub fn inject_field_edit(
     if backspaces == 0 && text.is_empty() {
         return Ok(());
     }
+    let _inject_guard = InjectGuard::new(); // suppress the typed-expander from seeing our own keystrokes
     let char_delay_ms = get_settings(app_handle).field_stream_char_delay_ms;
     let enigo_state = app_handle
         .try_state::<EnigoState>()
@@ -667,6 +697,7 @@ pub fn inject_bulk(text: &str, app_handle: &AppHandle) -> Result<(), String> {
     if text.is_empty() {
         return Ok(());
     }
+    let _inject_guard = InjectGuard::new(); // suppress the typed-expander during our own paste
     let enigo_state = app_handle
         .try_state::<EnigoState>()
         .ok_or("Enigo state not initialized")?;
@@ -678,6 +709,7 @@ pub fn inject_bulk(text: &str, app_handle: &AppHandle) -> Result<(), String> {
 }
 
 pub fn paste(text: String, app_handle: AppHandle) -> Result<(), String> {
+    let _inject_guard = InjectGuard::new();
     let settings = get_settings(&app_handle);
     let paste_method = settings.paste_method;
     let paste_delay_ms = settings.paste_delay_ms;

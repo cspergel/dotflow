@@ -399,6 +399,11 @@ pub struct AppSettings {
     /// faster typing. Applies to the streaming field-injection path.
     #[serde(default = "default_field_stream_char_delay_ms")]
     pub field_stream_char_delay_ms: u64,
+    /// DotFlow: EXPERIMENTAL Beeftext-style TYPED text expander (default OFF). When on, a global keyboard
+    /// monitor watches what you type and expands your dot-triggers (`.fu`) in ANY app — the same phrase
+    /// library that powers spoken triggers. Off by default; it monitors typing, so it is strictly opt-in.
+    #[serde(default)]
+    pub experimental_typed_expander: bool,
     #[serde(default)]
     pub clipboard_handling: ClipboardHandling,
     #[serde(default = "default_auto_submit")]
@@ -861,6 +866,7 @@ pub fn get_default_settings() -> AppSettings {
         experimental_field_streaming: false,
         field_stream_throttle_ms: default_field_stream_throttle_ms(),
         field_stream_char_delay_ms: default_field_stream_char_delay_ms(),
+        experimental_typed_expander: false,
         clipboard_handling: ClipboardHandling::default(),
         auto_submit: default_auto_submit(),
         auto_submit_key: AutoSubmitKey::default(),

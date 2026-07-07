@@ -13,6 +13,7 @@
 pub mod field_stream;
 pub mod phrases;
 pub mod punctuation;
+pub mod typed_expander;
 
 pub use field_stream::FieldStreamer;
 pub use phrases::{expand, Phrase, PhraseTable};

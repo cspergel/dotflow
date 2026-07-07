@@ -57,6 +57,25 @@ impl PhraseTable {
     /// this to HOLD a spoken trigger still being said ("insert copd" → wait for "plan") so a multi-word
     /// phrase lands as one clean block. A complete match (equal length) is NOT a proper prefix — that alias
     /// is ready to expand, not hold.
+    /// TYPED-expander match: if `text` (what the user has typed so far) ends with a dot-trigger `.{key}`,
+    /// return `(chars_to_delete, expansion)` — the number of CHARACTERS to backspace (the `.key`) and the
+    /// replacement text. Longest key wins; the key is compared case-insensitively. Used by the typed text
+    /// expander (spoken triggers use `expand()`); returns `None` when nothing matches.
+    pub fn match_typed_trigger(&self, text: &str) -> Option<(usize, String)> {
+        let lower = text.to_lowercase();
+        let mut best: Option<(usize, String)> = None;
+        for (key, exp) in &self.by_key {
+            let trigger = format!(".{key}");
+            if lower.ends_with(&trigger) {
+                let n = trigger.chars().count();
+                if best.as_ref().map_or(true, |(len, _)| n > *len) {
+                    best = Some((n, exp.clone()));
+                }
+            }
+        }
+        best
+    }
+
     pub fn is_partial_alias(&self, tokens: &[&str]) -> bool {
         let input: Vec<String> = tokens.iter().flat_map(|t| canonical_words(t)).collect();
         if input.is_empty() {
