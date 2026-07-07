@@ -659,6 +659,24 @@ pub fn inject_field_edit(
     Ok(())
 }
 
+/// DotFlow: one-shot INSTANT insert via clipboard paste (Ctrl+V). Used for the field-streaming FINALIZE so a
+/// resolved macro/phrase block drops in at once instead of typing out char-by-char. The finalize is a single
+/// write (no streaming key-race to worry about), so clipboard paste is safe here and far faster. `text` is
+/// already processed (phrase-expanded) — no wedge.
+pub fn inject_bulk(text: &str, app_handle: &AppHandle) -> Result<(), String> {
+    if text.is_empty() {
+        return Ok(());
+    }
+    let enigo_state = app_handle
+        .try_state::<EnigoState>()
+        .ok_or("Enigo state not initialized")?;
+    let mut enigo = enigo_state
+        .0
+        .lock()
+        .map_err(|e| format!("Failed to lock Enigo: {}", e))?;
+    paste_via_clipboard(&mut enigo, text, app_handle, &PasteMethod::CtrlV, 20)
+}
+
 pub fn paste(text: String, app_handle: AppHandle) -> Result<(), String> {
     let settings = get_settings(&app_handle);
     let paste_method = settings.paste_method;

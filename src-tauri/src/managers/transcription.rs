@@ -1142,15 +1142,15 @@ impl TranscriptionManager {
     /// field-streaming was active.
     pub fn finalize_field_stream(&self, final_text: &str) {
         let phrase_table = crate::managers::phrases::wedge_table(&self.app_handle);
-        let (backspaces, to_type) = self
+        let (_backspaces, to_type) = self
             .field_streamer
             .lock()
             .unwrap()
             .flush(final_text, &phrase_table);
         if !to_type.is_empty() {
-            if let Err(e) =
-                crate::clipboard::inject_field_edit(backspaces, &to_type, &self.app_handle)
-            {
+            // INSTANT: the finalize is a single one-shot write (no streaming key-race), so paste the block
+            // via the clipboard rather than typing it char-by-char — a resolved macro drops in at once.
+            if let Err(e) = crate::clipboard::inject_bulk(&to_type, &self.app_handle) {
                 error!("DotFlow field-streaming finalize inject failed: {}", e);
             }
         }
