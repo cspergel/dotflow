@@ -103,13 +103,26 @@ impl PhraseManager {
 
     /* ---------- write (each rebuilds the cache) ---------- */
 
-    pub fn add(&self, key: String, aliases: Vec<String>, expansion: String) -> Result<PhraseRecord> {
+    pub fn add(
+        &self,
+        key: String,
+        aliases: Vec<String>,
+        expansion: String,
+    ) -> Result<PhraseRecord> {
         let conn = self.conn()?;
-        let next_order: i64 = conn
-            .query_row("SELECT COALESCE(MAX(sort_order), -1) + 1 FROM phrases", [], |r| r.get(0))?;
+        let next_order: i64 = conn.query_row(
+            "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM phrases",
+            [],
+            |r| r.get(0),
+        )?;
         let id = Self::insert_conn(&conn, &key, &aliases, &expansion, next_order)?;
         self.rebuild_cache()?;
-        Ok(PhraseRecord { id, key, aliases, expansion })
+        Ok(PhraseRecord {
+            id,
+            key,
+            aliases,
+            expansion,
+        })
     }
 
     pub fn update(
@@ -125,11 +138,17 @@ impl PhraseManager {
             params![key, serde_json::to_string(&aliases)?, expansion, id],
         )?;
         self.rebuild_cache()?;
-        Ok(PhraseRecord { id, key, aliases, expansion })
+        Ok(PhraseRecord {
+            id,
+            key,
+            aliases,
+            expansion,
+        })
     }
 
     pub fn delete(&self, id: i64) -> Result<()> {
-        self.conn()?.execute("DELETE FROM phrases WHERE id = ?1", params![id])?;
+        self.conn()?
+            .execute("DELETE FROM phrases WHERE id = ?1", params![id])?;
         self.rebuild_cache()?;
         Ok(())
     }
@@ -138,7 +157,11 @@ impl PhraseManager {
         let phrases: Vec<Phrase> = self
             .list()?
             .into_iter()
-            .map(|r| Phrase { key: r.key, aliases: r.aliases, expansion: r.expansion })
+            .map(|r| Phrase {
+                key: r.key,
+                aliases: r.aliases,
+                expansion: r.expansion,
+            })
             .collect();
         *self.cache.lock().unwrap() = Arc::new(PhraseTable::new(&phrases));
         Ok(())
@@ -161,8 +184,8 @@ impl PhraseManager {
     }
 
     fn list_conn(conn: &Connection) -> Result<Vec<PhraseRecord>> {
-        let mut stmt =
-            conn.prepare("SELECT id, key, aliases, expansion FROM phrases ORDER BY sort_order, id")?;
+        let mut stmt = conn
+            .prepare("SELECT id, key, aliases, expansion FROM phrases ORDER BY sort_order, id")?;
         let rows = stmt.query_map([], |row| {
             let aliases_json: String = row.get(2)?;
             let aliases: Vec<String> = serde_json::from_str(&aliases_json).unwrap_or_default();
@@ -187,38 +210,66 @@ mod tests {
 
     fn mem() -> Connection {
         let mut conn = Connection::open_in_memory().unwrap();
-        Migrations::new(MIGRATIONS.to_vec()).to_latest(&mut conn).unwrap();
+        Migrations::new(MIGRATIONS.to_vec())
+            .to_latest(&mut conn)
+            .unwrap();
         conn
     }
 
     #[test]
     fn insert_then_list_round_trips_aliases_and_order() {
         let conn = mem();
-        PhraseManager::insert_conn(&conn, "copd", &["insert copd plan".into()], "COPD plan.", 0).unwrap();
-        PhraseManager::insert_conn(&conn, "fu", &["insert follow up".into(), "insert fu".into()], "FU.", 1)
+        PhraseManager::insert_conn(&conn, "copd", &["insert copd plan".into()], "COPD plan.", 0)
             .unwrap();
+        PhraseManager::insert_conn(
+            &conn,
+            "fu",
+            &["insert follow up".into(), "insert fu".into()],
+            "FU.",
+            1,
+        )
+        .unwrap();
         let rows = PhraseManager::list_conn(&conn).unwrap();
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].key, "copd");
         assert_eq!(rows[0].aliases, vec!["insert copd plan".to_string()]);
-        assert_eq!(rows[1].aliases, vec!["insert follow up".to_string(), "insert fu".to_string()]);
+        assert_eq!(
+            rows[1].aliases,
+            vec!["insert follow up".to_string(), "insert fu".to_string()]
+        );
         assert_eq!(rows[1].expansion, "FU.");
     }
 
     #[test]
     fn a_listed_phrase_compiles_into_a_table_that_expands() {
         let conn = mem();
-        PhraseManager::insert_conn(&conn, "fu", &["insert follow up".into()], "Follow up in two weeks.", 0)
-            .unwrap();
+        PhraseManager::insert_conn(
+            &conn,
+            "fu",
+            &["insert follow up".into()],
+            "Follow up in two weeks.",
+            0,
+        )
+        .unwrap();
         let phrases: Vec<Phrase> = PhraseManager::list_conn(&conn)
             .unwrap()
             .into_iter()
-            .map(|r| Phrase { key: r.key, aliases: r.aliases, expansion: r.expansion })
+            .map(|r| Phrase {
+                key: r.key,
+                aliases: r.aliases,
+                expansion: r.expansion,
+            })
             .collect();
         let table = PhraseTable::new(&phrases);
         // the user's stored phrase drives real expansion (dot + spoken alias), punctuation-tolerant.
-        assert_eq!(crate::dotflow::expand(".fu", &table), "Follow up in two weeks.");
-        assert_eq!(crate::dotflow::expand("Insert follow up.", &table), "Follow up in two weeks.");
+        assert_eq!(
+            crate::dotflow::expand(".fu", &table),
+            "Follow up in two weeks."
+        );
+        assert_eq!(
+            crate::dotflow::expand("Insert follow up.", &table),
+            "Follow up in two weeks."
+        );
     }
 
     #[test]

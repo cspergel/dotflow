@@ -29,6 +29,7 @@ Everything else we added lives in **new files Handy doesn't have** (see below) a
 merging upstream, expect conflicts only here:
 
 **Rust (`src-tauri/src/`)**
+
 - `clipboard.rs` — char-by-char keystroke injection + settle (the Windows key-repeat fix); `inject_field_edit`; `paste()` runs the phrase wedge + reads the user's table.
 - `managers/transcription.rs` — the streaming field-injection hook (`emit_stream_text`, `finalize_field_stream`, `FieldStreamer`, throttle/char-delay), reads the phrase table.
 - `actions.rs` — emits `dictation-state` on record start/stop; the field-streaming stop path.
@@ -37,6 +38,7 @@ merging upstream, expect conflicts only here:
 - `managers/mod.rs`, `commands/mod.rs` — module registration for the new `phrases` modules.
 
 **Config / build**
+
 - `tauri.conf.json` — productName/identifier (com.dotflow.app).
 - `capabilities/default.json` — added window perms (set-size/min-size/resizable/always-on-top/start-dragging/minimize/hide) for the compact bar.
 - `Cargo.toml` / `Cargo.lock` — package rename `dotflow`, `default-run`, dropped whisper `vulkan` feature (x86_64-windows).
@@ -44,6 +46,7 @@ merging upstream, expect conflicts only here:
 - `src-tauri/icons/*` — all regenerated from `icon-source.png` (the green dot-flow mark).
 
 **Frontend (`src/`)**
+
 - `App.tsx` — compact/full view mode + window resize; `dictation-state` listener; frameless chrome wiring.
 - `components/Sidebar.tsx` — slimmed, de-branded (no wordmark, subtle active state).
 - `components/icons/HandyTextLogo.tsx`, `HandyHand.tsx` — repurposed to the DotFlow wordmark + dot-flow mark (names kept for import compatibility).

@@ -29,18 +29,66 @@ struct Mark {
 /// The deterministic command table. Longest phrases FIRST so multi-word tokens ("new paragraph") match
 /// before their prefixes ("new"). Verbatim, ASCII, locale-independent (design: no OS-locale dependence).
 const MARKS: &[Mark] = &[
-    Mark { spoken: "new paragraph", mark: "\n\n", attaches_left: true },
-    Mark { spoken: "new line", mark: "\n", attaches_left: true },
-    Mark { spoken: "question mark", mark: "?", attaches_left: true },
-    Mark { spoken: "exclamation point", mark: "!", attaches_left: true },
-    Mark { spoken: "exclamation mark", mark: "!", attaches_left: true },
-    Mark { spoken: "open paren", mark: "(", attaches_left: false },
-    Mark { spoken: "close paren", mark: ")", attaches_left: true },
-    Mark { spoken: "semicolon", mark: ";", attaches_left: true },
-    Mark { spoken: "colon", mark: ":", attaches_left: true },
-    Mark { spoken: "comma", mark: ",", attaches_left: true },
-    Mark { spoken: "period", mark: ".", attaches_left: true },
-    Mark { spoken: "full stop", mark: ".", attaches_left: true },
+    Mark {
+        spoken: "new paragraph",
+        mark: "\n\n",
+        attaches_left: true,
+    },
+    Mark {
+        spoken: "new line",
+        mark: "\n",
+        attaches_left: true,
+    },
+    Mark {
+        spoken: "question mark",
+        mark: "?",
+        attaches_left: true,
+    },
+    Mark {
+        spoken: "exclamation point",
+        mark: "!",
+        attaches_left: true,
+    },
+    Mark {
+        spoken: "exclamation mark",
+        mark: "!",
+        attaches_left: true,
+    },
+    Mark {
+        spoken: "open paren",
+        mark: "(",
+        attaches_left: false,
+    },
+    Mark {
+        spoken: "close paren",
+        mark: ")",
+        attaches_left: true,
+    },
+    Mark {
+        spoken: "semicolon",
+        mark: ";",
+        attaches_left: true,
+    },
+    Mark {
+        spoken: "colon",
+        mark: ":",
+        attaches_left: true,
+    },
+    Mark {
+        spoken: "comma",
+        mark: ",",
+        attaches_left: true,
+    },
+    Mark {
+        spoken: "period",
+        mark: ".",
+        attaches_left: true,
+    },
+    Mark {
+        spoken: "full stop",
+        mark: ".",
+        attaches_left: true,
+    },
 ];
 
 /// Apply the spoken-punctuation command table to `input`. Whole-token match, case-insensitive on the
@@ -89,9 +137,7 @@ fn match_mark(rest: &[&str]) -> Option<(&'static Mark, usize)> {
 /// Append `s` with a single separating space unless `out` is empty or already ends in an open bracket
 /// or a newline (so "(" hugs the following word and a new paragraph doesn't get a leading space).
 fn push_spaced(out: &mut String, s: &str) {
-    let needs_space = !out.is_empty()
-        && !out.ends_with('(')
-        && !out.ends_with('\n');
+    let needs_space = !out.is_empty() && !out.ends_with('(') && !out.ends_with('\n');
     if needs_space {
         out.push(' ');
     }
@@ -104,14 +150,23 @@ mod tests {
 
     #[test]
     fn period_hugs_the_previous_word() {
-        assert_eq!(apply_spoken("the patient is stable period"), "the patient is stable.");
+        assert_eq!(
+            apply_spoken("the patient is stable period"),
+            "the patient is stable."
+        );
     }
 
     #[test]
     fn multi_word_marks_match_before_prefixes() {
         // "new paragraph" must win over "new" + "paragraph", and "new line" over "new".
-        assert_eq!(apply_spoken("done period new paragraph next"), "done.\n\nnext");
-        assert_eq!(apply_spoken("line one new line line two"), "line one\nline two");
+        assert_eq!(
+            apply_spoken("done period new paragraph next"),
+            "done.\n\nnext"
+        );
+        assert_eq!(
+            apply_spoken("line one new line line two"),
+            "line one\nline two"
+        );
     }
 
     #[test]
@@ -121,7 +176,10 @@ mod tests {
 
     #[test]
     fn open_paren_leads_the_next_word_close_paren_hugs() {
-        assert_eq!(apply_spoken("the dose open paren ten mg close paren daily"), "the dose (ten mg) daily");
+        assert_eq!(
+            apply_spoken("the dose open paren ten mg close paren daily"),
+            "the dose (ten mg) daily"
+        );
     }
 
     #[test]
@@ -134,7 +192,10 @@ mod tests {
     #[test]
     fn a_word_that_merely_contains_a_mark_word_is_not_a_mark() {
         // "commanding" is not "comma"; only whole tokens match.
-        assert_eq!(apply_spoken("the commanding officer"), "the commanding officer");
+        assert_eq!(
+            apply_spoken("the commanding officer"),
+            "the commanding officer"
+        );
     }
 
     #[test]

@@ -104,7 +104,8 @@ pub fn expand(input: &str, table: &PhraseTable) -> String {
 /// any ASCII punctuation the ASR attaches ("Up." → "up", "insert," → "insert"). Non-trigger dictation is
 /// always emitted from the ORIGINAL token, so its real capitalization + punctuation are preserved.
 pub(crate) fn norm(tok: &str) -> String {
-    tok.trim_matches(|c: char| c.is_ascii_punctuation()).to_lowercase()
+    tok.trim_matches(|c: char| c.is_ascii_punctuation())
+        .to_lowercase()
 }
 
 /// Split a token into its CANONICAL words for matching: break on hyphens (so the ASR's "follow-up" matches
@@ -170,7 +171,10 @@ mod tests {
 
     #[test]
     fn dot_trigger_expands() {
-        assert_eq!(expand(".copd", &table()), "COPD: continue inhalers, follow up pulmonary.");
+        assert_eq!(
+            expand(".copd", &table()),
+            "COPD: continue inhalers, follow up pulmonary."
+        );
     }
 
     #[test]
@@ -192,7 +196,10 @@ mod tests {
     #[test]
     fn longest_alias_wins_and_is_case_insensitive() {
         // "INSERT COPD PLAN" (upper) still matches the alias as one block, not word-by-word.
-        assert_eq!(expand("INSERT COPD PLAN", &table()), "COPD: continue inhalers, follow up pulmonary.");
+        assert_eq!(
+            expand("INSERT COPD PLAN", &table()),
+            "COPD: continue inhalers, follow up pulmonary."
+        );
     }
 
     #[test]
@@ -202,7 +209,10 @@ mod tests {
 
     #[test]
     fn plain_dictation_is_unchanged_and_total_on_empty() {
-        assert_eq!(expand("the patient is doing well", &table()), "the patient is doing well");
+        assert_eq!(
+            expand("the patient is doing well", &table()),
+            "the patient is doing well"
+        );
         assert_eq!(expand("", &table()), "");
     }
 
@@ -219,8 +229,10 @@ mod tests {
         assert_eq!(expand("Insert follow up.", &table()), exp);
         assert_eq!(expand("insert follow up,", &table()), exp);
         // and mid-sentence with the ASR's comma on the last trigger word.
-        assert_eq!(expand("note: insert follow up. thanks", &table()),
-            format!("note: {} thanks", exp));
+        assert_eq!(
+            expand("note: insert follow up. thanks", &table()),
+            format!("note: {} thanks", exp)
+        );
     }
 
     #[test]
@@ -231,23 +243,38 @@ mod tests {
     #[test]
     fn a_non_trigger_word_keeps_its_own_punctuation_and_case() {
         // normalization is for MATCHING only — passthrough text is emitted verbatim.
-        assert_eq!(expand("The Patient, stable.", &table()), "The Patient, stable.");
+        assert_eq!(
+            expand("The Patient, stable.", &table()),
+            "The Patient, stable."
+        );
     }
 
     #[test]
     fn asr_hyphenation_still_triggers_the_spoken_phrase() {
         // Parakeet writes "insert follow up" as "Insert follow-up." — one hyphenated token — but it must
         // still fire the 3-word alias "insert follow up".
-        assert_eq!(expand("Insert follow-up.", &table()), "Follow up in two weeks.");
-        assert_eq!(expand("Insert follow-up", &table()), "Follow up in two weeks.");
+        assert_eq!(
+            expand("Insert follow-up.", &table()),
+            "Follow up in two weeks."
+        );
+        assert_eq!(
+            expand("Insert follow-up", &table()),
+            "Follow up in two weeks."
+        );
         // mid-sentence too.
-        assert_eq!(expand("note insert follow-up thanks", &table()), "note Follow up in two weeks. thanks");
+        assert_eq!(
+            expand("note insert follow-up thanks", &table()),
+            "note Follow up in two weeks. thanks"
+        );
     }
 
     #[test]
     fn a_non_trigger_hyphenated_word_keeps_its_hyphen() {
         // hyphen-splitting is matching-only; non-trigger passthrough keeps the original token verbatim.
-        assert_eq!(expand("state-of-the-art care", &table()), "state-of-the-art care");
+        assert_eq!(
+            expand("state-of-the-art care", &table()),
+            "state-of-the-art care"
+        );
     }
 
     #[test]

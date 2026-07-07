@@ -633,7 +633,11 @@ fn type_text_char_by_char(enigo: &mut Enigo, text: &str, char_delay_ms: u64) -> 
 /// text is append-only), so this is just an incremental type. Types char-by-char with a per-char delay so the
 /// OS never drops a key-up (no repeated/dropped characters), and holds the lock throughout so bursts can't
 /// interleave.
-pub fn inject_field_edit(backspaces: usize, text: &str, app_handle: &AppHandle) -> Result<(), String> {
+pub fn inject_field_edit(
+    backspaces: usize,
+    text: &str,
+    app_handle: &AppHandle,
+) -> Result<(), String> {
     if backspaces == 0 && text.is_empty() {
         return Ok(());
     }
@@ -665,11 +669,8 @@ pub fn paste(text: String, app_handle: AppHandle) -> Result<(), String> {
     // for now (Parakeet already punctuates); the spoken/raw toggle is a later setting. This is where a
     // dictated or typed trigger becomes its template, as one clean block, right before it lands in the field.
     let phrase_table = crate::managers::phrases::wedge_table(&app_handle);
-    let text = crate::dotflow::process_clause(
-        &text,
-        crate::dotflow::PunctuationMode::Auto,
-        &phrase_table,
-    );
+    let text =
+        crate::dotflow::process_clause(&text, crate::dotflow::PunctuationMode::Auto, &phrase_table);
 
     // Append trailing space if setting is enabled
     let text = if settings.append_trailing_space {

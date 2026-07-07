@@ -53,14 +53,38 @@ pub fn starter_pack_phrases() -> Vec<Phrase> {
         // Coder pack (the launch audience): prompt prefixes for dictating into an AI IDE / chat box.
         p("fix", &["insert fix"], "Fix the bug where "),
         p("refactor", &["insert refactor"], "Refactor this so that "),
-        p("test", &["insert test", "write a test"], "Write a test for "),
-        p("explain", &["insert explain"], "Explain what this code does and why: "),
-        p("commit", &["insert commit"], "Write a concise commit message for these changes."),
-        p("pr", &["insert pull request", "insert pr"], "Summarize this change as a pull-request description."),
+        p(
+            "test",
+            &["insert test", "write a test"],
+            "Write a test for ",
+        ),
+        p(
+            "explain",
+            &["insert explain"],
+            "Explain what this code does and why: ",
+        ),
+        p(
+            "commit",
+            &["insert commit"],
+            "Write a concise commit message for these changes.",
+        ),
+        p(
+            "pr",
+            &["insert pull request", "insert pr"],
+            "Summarize this change as a pull-request description.",
+        ),
         p("todo", &["insert todo"], "TODO: "),
         // General.
-        p("ty", &["insert thanks"], "Thanks so much — really appreciate it."),
-        p("fu", &["insert follow up"], "Following up on this — let me know if you need anything else."),
+        p(
+            "ty",
+            &["insert thanks"],
+            "Thanks so much — really appreciate it.",
+        ),
+        p(
+            "fu",
+            &["insert follow up"],
+            "Following up on this — let me know if you need anything else.",
+        ),
     ]
 }
 
@@ -87,7 +111,10 @@ mod tests {
     fn command_clause_resolves_to_the_template_block_in_any_mode() {
         let t = table();
         let exp = "COPD: continue inhalers, follow up pulmonary.";
-        assert_eq!(process_clause("insert copd plan", PunctuationMode::Auto, &t), exp);
+        assert_eq!(
+            process_clause("insert copd plan", PunctuationMode::Auto, &t),
+            exp
+        );
         assert_eq!(process_clause(".copd", PunctuationMode::Raw, &t), exp);
     }
 

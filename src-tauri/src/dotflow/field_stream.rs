@@ -36,7 +36,10 @@ pub struct FieldStreamer {
 
 impl Default for FieldStreamer {
     fn default() -> Self {
-        FieldStreamer { consumed: String::new(), last_char: None }
+        FieldStreamer {
+            consumed: String::new(),
+            last_char: None,
+        }
     }
 }
 
@@ -180,15 +183,24 @@ mod tests {
         assert_eq!(s.advance("the", &t), (0, String::new())); // "the" still in progress → held
         assert_eq!(s.advance("the patient", &t), (0, "the".to_string())); // "the" finished; "patient" held
         assert_eq!(s.advance("the patient is", &t), (0, " patient".to_string()));
-        assert_eq!(s.flush("the patient is stable", &t), (0, " is stable".to_string()));
+        assert_eq!(
+            s.flush("the patient is stable", &t),
+            (0, " is stable".to_string())
+        );
     }
 
     #[test]
     fn finished_words_release_together() {
         let mut s = FieldStreamer::new();
         let t = empty();
-        assert_eq!(s.advance("the patient is stable and ", &t), (0, "the patient is stable and".to_string()));
-        assert_eq!(s.advance("the patient is stable and improving well ", &t), (0, " improving well".to_string()));
+        assert_eq!(
+            s.advance("the patient is stable and ", &t),
+            (0, "the patient is stable and".to_string())
+        );
+        assert_eq!(
+            s.advance("the patient is stable and improving well ", &t),
+            (0, " improving well".to_string())
+        );
     }
 
     #[test]
@@ -215,10 +227,18 @@ mod tests {
         let mut s = FieldStreamer::new();
         let t = table();
         // ".copd" has no trailing space yet → held; the preceding finished word releases.
-        assert_eq!(s.advance("assessment .copd", &t), (0, "assessment".to_string()));
+        assert_eq!(
+            s.advance("assessment .copd", &t),
+            (0, "assessment".to_string())
+        );
         // once a following word arrives, ".copd" is finished → expands as a block; "done" is now held.
-        assert_eq!(s.advance("assessment .copd done", &t),
-            (0, " COPD: continue inhalers, follow up pulmonary.".to_string()));
+        assert_eq!(
+            s.advance("assessment .copd done", &t),
+            (
+                0,
+                " COPD: continue inhalers, follow up pulmonary.".to_string()
+            )
+        );
     }
 
     // ── voice-aliases (multi-word → the command-buffer) ─────────────────────────────────────────────────
@@ -231,8 +251,13 @@ mod tests {
         // "insert copd" still a proper prefix of "insert copd plan" → held.
         assert_eq!(s.advance("insert copd ", &t), (0, String::new()));
         // "insert copd plan" completes → expands as one clean block.
-        assert_eq!(s.advance("insert copd plan ", &t),
-            (0, "COPD: continue inhalers, follow up pulmonary.".to_string()));
+        assert_eq!(
+            s.advance("insert copd plan ", &t),
+            (
+                0,
+                "COPD: continue inhalers, follow up pulmonary.".to_string()
+            )
+        );
     }
 
     #[test]
@@ -240,8 +265,11 @@ mod tests {
         let mut s = FieldStreamer::new();
         let t = table();
         assert_eq!(s.advance("insert ", &t), (0, String::new())); // held (prefix)
-        // "insert copies" is not a prefix of any alias → release the words raw.
-        assert_eq!(s.advance("insert copies ", &t), (0, "insert copies".to_string()));
+                                                                  // "insert copies" is not a prefix of any alias → release the words raw.
+        assert_eq!(
+            s.advance("insert copies ", &t),
+            (0, "insert copies".to_string())
+        );
     }
 
     #[test]
@@ -249,10 +277,18 @@ mod tests {
         let mut s = FieldStreamer::new();
         let t = table();
         // "the plan is" releases; "insert" starts buffering.
-        assert_eq!(s.advance("the plan is insert ", &t), (0, "the plan is".to_string()));
-        assert_eq!(s.advance("the plan is insert follow ", &t), (0, String::new())); // "insert follow" buffers
-        assert_eq!(s.advance("the plan is insert follow up ", &t),
-            (0, " Follow up in two weeks.".to_string()));
+        assert_eq!(
+            s.advance("the plan is insert ", &t),
+            (0, "the plan is".to_string())
+        );
+        assert_eq!(
+            s.advance("the plan is insert follow ", &t),
+            (0, String::new())
+        ); // "insert follow" buffers
+        assert_eq!(
+            s.advance("the plan is insert follow up ", &t),
+            (0, " Follow up in two weeks.".to_string())
+        );
     }
 
     #[test]
@@ -260,7 +296,7 @@ mod tests {
         let mut s = FieldStreamer::new();
         let t = table();
         assert_eq!(s.advance("insert copd ", &t), (0, String::new())); // buffered
-        // user stops mid-trigger → the buffered words are typed raw (not a complete alias).
+                                                                       // user stops mid-trigger → the buffered words are typed raw (not a complete alias).
         assert_eq!(s.flush("insert copd", &t), (0, "insert copd".to_string()));
     }
 
