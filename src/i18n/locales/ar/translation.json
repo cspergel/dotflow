@@ -181,6 +181,10 @@
           "transcribe_with_post_process": {
             "name": "مفتاح المعالجة اللاحقة",
             "description": "اختياري: مفتاح اختصار مخصص يطبق دائماً المعالجة اللاحقة بالذكاء الاصطناعي على التفريغ الصوتي."
+          },
+          "cleanup_selection": {
+            "name": "Clean Up Selected Text",
+            "description": "Copies the selected text, cleans it up (basic fixes by default, or your post-processing AI if configured), and pastes it back over the selection."
           }
         },
         "errors": {

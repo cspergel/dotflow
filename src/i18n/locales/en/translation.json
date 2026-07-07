@@ -184,6 +184,10 @@
           "transcribe_with_post_process": {
             "name": "Post-Processing Hotkey",
             "description": "Optional: A dedicated hotkey that always applies AI post-processing to your transcription."
+          },
+          "cleanup_selection": {
+            "name": "Clean Up Selected Text",
+            "description": "Copies the selected text, cleans it up (basic fixes by default, or your post-processing AI if configured), and pastes it back over the selection."
           }
         },
         "errors": {

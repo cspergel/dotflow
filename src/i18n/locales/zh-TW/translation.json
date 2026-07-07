@@ -184,6 +184,10 @@
           "transcribe_with_post_process": {
             "name": "後處理快捷鍵",
             "description": "可選：專用快捷鍵，使用時一律對轉錄結果套用 AI 後處理"
+          },
+          "cleanup_selection": {
+            "name": "Clean Up Selected Text",
+            "description": "Copies the selected text, cleans it up (basic fixes by default, or your post-processing AI if configured), and pastes it back over the selection."
           }
         },
         "errors": {

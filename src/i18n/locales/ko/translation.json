@@ -184,6 +184,10 @@
           "transcribe_with_post_process": {
             "name": "후처리 단축키",
             "description": "선택 사항: 항상 AI 후처리를 적용하는 전용 단축키입니다."
+          },
+          "cleanup_selection": {
+            "name": "Clean Up Selected Text",
+            "description": "Copies the selected text, cleans it up (basic fixes by default, or your post-processing AI if configured), and pastes it back over the selection."
           }
         },
         "errors": {

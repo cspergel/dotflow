@@ -202,6 +202,10 @@
           "transcribe_with_post_process": {
             "name": "后处理快捷键",
             "description": "可选：一个专用快捷键，始终对您的转录应用 AI 后处理。"
+          },
+          "cleanup_selection": {
+            "name": "Clean Up Selected Text",
+            "description": "Copies the selected text, cleans it up (basic fixes by default, or your post-processing AI if configured), and pastes it back over the selection."
           }
         },
         "errors": {

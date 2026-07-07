@@ -56,10 +56,20 @@ powers spoken triggers). Step 1 (safe foundation, off by default) is **done** (`
       choice to move to task 4). Remaining pages still on old tokens: History, Post-processing, Phrases,
       General, Debug (they work; not yet ladder-styled).
 
-### 4. Clean-up-selected-text hotkey (IN PROGRESS)
+### 4. Clean-up-selected-text hotkey ✅
 
-- [ ] A 2nd hotkey that sends the SELECTED text to the post-process LLM (Ctrl+C → read clipboard → LLM
-      cleanup prompt → paste result). Reuses existing post-processing + clipboard infra.
+- [x] `cleanup_selection` hotkey (default **Ctrl+Shift+U** — NOT Ctrl+Alt+\*, which is AltGr on Windows and
+      gets swallowed). Copies the selection → cleans it → pastes over it → restores the clipboard. One-shot
+      `CleanupSelectionAction`; sync clipboard/keystroke work on a blocking thread, only the LLM awaited.
+- [x] **Deterministic cleanup by default** (`dotflow/cleanup.rs`, 10 unit tests): whitespace, spacing around
+      punctuation, sentence capitalization, "i"→"I". Conservative — preserves decimals/number groups/line
+      breaks; leaves ambiguous grammar (its/it's) alone. Zero setup.
+- [x] **Upgrades to the post-process LLM** when configured (local Ollama or cloud) via a fixed built-in
+      cleanup prompt — reuses `post_process_transcription` with a settings clone, so the dictation path is
+      untouched. Falls back to deterministic if the LLM isn't configured or fails.
+- [x] **Footgun fix:** the shortcut validator now rejects modifier-less global bindings (a bare `l` was
+      firing on every keypress). Escape + F-keys stay exempt. 5 unit tests. (`shortcut/tauri_impl.rs`)
+- Live-validated: `hello  world ,its  me` → `Hello world, its me`.
 
 ## Later / backlog
 

@@ -842,6 +842,24 @@ pub fn get_default_settings() -> AppSettings {
             current_binding: "escape".to_string(),
         },
     );
+    // DotFlow: clean up the currently-selected text (copy → cleanup → paste over it). NB: avoid Ctrl+Alt on
+    // Windows/Linux — that combo is AltGr and gets swallowed by the keyboard layout instead of firing.
+    #[cfg(target_os = "macos")]
+    let default_cleanup_shortcut = "cmd+shift+u";
+    #[cfg(not(target_os = "macos"))]
+    let default_cleanup_shortcut = "ctrl+shift+u";
+    bindings.insert(
+        "cleanup_selection".to_string(),
+        ShortcutBinding {
+            id: "cleanup_selection".to_string(),
+            name: "Clean Up Selected Text".to_string(),
+            description:
+                "Copies the selected text, cleans it up (basic fixes by default, or your post-processing AI if configured), and pastes it back."
+                    .to_string(),
+            default_binding: default_cleanup_shortcut.to_string(),
+            current_binding: default_cleanup_shortcut.to_string(),
+        },
+    );
 
     AppSettings {
         settings_schema_version: default_settings_schema_version(),

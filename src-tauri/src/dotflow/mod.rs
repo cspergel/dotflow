@@ -10,6 +10,7 @@
 //! unit-testable AND gradable by the DTF referee. The effectful shell (SQLite phrase library, the live
 //! injection cadence, the overlay) wraps this core; it is intentionally NOT in this module.
 
+pub mod cleanup;
 pub mod field_stream;
 pub mod phrases;
 pub mod punctuation;

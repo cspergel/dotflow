@@ -112,6 +112,32 @@ pub fn send_paste_shift_insert(enigo: &mut Enigo) -> Result<(), String> {
     Ok(())
 }
 
+/// Sends a Ctrl+C or Cmd+C copy command using platform-specific virtual key codes (layout-independent).
+/// Used by the "clean up selected text" hotkey to grab the current selection onto the clipboard.
+pub fn send_copy_ctrl_c(enigo: &mut Enigo) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    let (modifier_key, c_key_code) = (Key::Meta, Key::Other(8)); // Cmd+C
+    #[cfg(target_os = "windows")]
+    let (modifier_key, c_key_code) = (Key::Control, Key::Other(0x43)); // VK_C
+    #[cfg(target_os = "linux")]
+    let (modifier_key, c_key_code) = (Key::Control, Key::Unicode('c'));
+
+    enigo
+        .key(modifier_key, enigo::Direction::Press)
+        .map_err(|e| format!("Failed to press modifier key: {}", e))?;
+    enigo
+        .key(c_key_code, enigo::Direction::Click)
+        .map_err(|e| format!("Failed to click C key: {}", e))?;
+
+    std::thread::sleep(std::time::Duration::from_millis(50));
+
+    enigo
+        .key(modifier_key, enigo::Direction::Release)
+        .map_err(|e| format!("Failed to release modifier key: {}", e))?;
+
+    Ok(())
+}
+
 /// Pastes text directly using the enigo text method.
 /// This tries to use system input methods if possible, otherwise simulates keystrokes one by one.
 pub fn paste_text_direct(enigo: &mut Enigo, text: &str) -> Result<(), String> {

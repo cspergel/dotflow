@@ -61,12 +61,39 @@ pub fn validate_shortcut(raw: &str) -> Result<(), String> {
 
     // Check for at least one non-modifier key
     let has_non_modifier = parts.iter().any(|part| !modifiers.contains(&part.as_str()));
-
-    if has_non_modifier {
-        Ok(())
-    } else {
-        Err("Tauri shortcuts must include a main key (letter, number, F-key, etc.) in addition to modifiers".into())
+    if !has_non_modifier {
+        return Err("Shortcuts must include a main key (letter, number, F-key, etc.) in addition to modifiers".into());
     }
+
+    // DotFlow: a persistent GLOBAL shortcut must include a modifier. A bare key like "l" would fire on every
+    // press of that key system-wide — it makes the app unusable and traps the user (typing re-triggers it).
+    // Bare Escape and F-keys are exempt: they aren't typed into text, so they carry no such footgun (and the
+    // `cancel` binding legitimately uses a bare "escape").
+    let has_modifier = parts.iter().any(|part| modifiers.contains(&part.as_str()));
+    if !has_modifier && !is_exempt_bare_key(&parts) {
+        return Err(
+            "Shortcut must include a modifier (Ctrl, Alt, Shift, or Win) — a bare key would fire on every keypress"
+                .into(),
+        );
+    }
+
+    Ok(())
+}
+
+/// Keys allowed as a global shortcut with NO modifier: Escape, and F1–F24. Everything else typable needs a
+/// modifier (see `validate_shortcut`).
+fn is_exempt_bare_key(parts: &[String]) -> bool {
+    if parts.len() != 1 {
+        return false;
+    }
+    let key = parts[0].as_str();
+    if key == "escape" || key == "esc" {
+        return true;
+    }
+    // F1–F24
+    key.strip_prefix('f')
+        .and_then(|n| n.parse::<u32>().ok())
+        .is_some_and(|n| (1..=24).contains(&n))
 }
 
 /// Register a shortcut using Tauri's global-shortcut plugin
@@ -194,5 +221,46 @@ pub fn unregister_cancel_shortcut(app: &AppHandle) {
                 let _ = unregister_shortcut(&app_clone, cancel_binding);
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_shortcut;
+
+    #[test]
+    fn rejects_a_bare_letter() {
+        // The exact footgun: "l" alone would fire on every L keypress system-wide.
+        assert!(validate_shortcut("l").is_err());
+        assert!(validate_shortcut("a").is_err());
+        assert!(validate_shortcut("5").is_err());
+        assert!(validate_shortcut("space").is_err());
+    }
+
+    #[test]
+    fn accepts_modifier_combos() {
+        assert!(validate_shortcut("ctrl+shift+u").is_ok());
+        assert!(validate_shortcut("ctrl+space").is_ok());
+        assert!(validate_shortcut("alt+shift+k").is_ok());
+    }
+
+    #[test]
+    fn allows_bare_escape_and_fkeys() {
+        // Not typed into text, so no footgun; `cancel` uses a bare "escape".
+        assert!(validate_shortcut("escape").is_ok());
+        assert!(validate_shortcut("f5").is_ok());
+        assert!(validate_shortcut("f24").is_ok());
+    }
+
+    #[test]
+    fn rejects_modifier_only_and_empty() {
+        assert!(validate_shortcut("ctrl").is_err()); // no main key
+        assert!(validate_shortcut("ctrl+shift").is_err());
+        assert!(validate_shortcut("").is_err());
+    }
+
+    #[test]
+    fn rejects_the_fn_key() {
+        assert!(validate_shortcut("fn").is_err());
     }
 }

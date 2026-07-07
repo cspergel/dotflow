@@ -884,6 +884,120 @@ impl ShortcutAction for TestAction {
     }
 }
 
+// ---- Clean up selected text (DotFlow) ----
+
+/// The fixed prompt the "clean up selected text" hotkey sends to the post-process LLM. Independent of the
+/// user's selected dictation prompt. `${output}` is the selection: the legacy path substitutes it; the
+/// structured-output path strips it and sends the text as the user message. (Editable-per-user later.)
+const CLEANUP_PROMPT: &str = "Clean up the following text: fix spelling, grammar, punctuation, and \
+capitalization, and improve clarity while preserving the original meaning, tone, and any formatting. Do not \
+add commentary, explanations, or quotation marks — return only the corrected text.\n\n${output}";
+
+/// Run the currently-configured post-process LLM over `input` with the fixed cleanup prompt. Reuses
+/// `post_process_transcription` by handing it a settings CLONE whose selected prompt is the cleanup prompt,
+/// so the dictation post-process path is untouched. Returns `None` if no provider/model/API key is
+/// configured (the hotkey then no-ops).
+async fn cleanup_with_llm(settings: &AppSettings, input: &str) -> Option<String> {
+    let mut s = settings.clone();
+    let id = "__dotflow_cleanup__".to_string();
+    s.post_process_prompts.push(crate::settings::LLMPrompt {
+        id: id.clone(),
+        name: "Clean up selected text".to_string(),
+        prompt: CLEANUP_PROMPT.to_string(),
+    });
+    s.post_process_selected_prompt_id = Some(id);
+    post_process_transcription(&s, input).await
+}
+
+/// The "clean up selected text" hotkey pipeline: copy the selection, run it through the post-process LLM
+/// with the cleanup prompt, paste the result over the selection, and restore the user's original clipboard.
+/// The synchronous clipboard/keystroke work runs on a blocking thread; only the LLM call is awaited.
+async fn cleanup_selection(app: &AppHandle) -> Result<(), String> {
+    use tauri_plugin_clipboard_manager::ClipboardExt;
+
+    // Phase 1 (blocking): remember the clipboard, copy the current selection, read it back.
+    let app_c = app.clone();
+    let (original, selected) = tauri::async_runtime::spawn_blocking(move || {
+        let clipboard = app_c.clipboard();
+        let original = clipboard.read_text().unwrap_or_default();
+        {
+            // Guard so the typed expander ignores our synthetic Ctrl+C.
+            let _guard = crate::clipboard::injection_guard();
+            if let Some(state) = app_c.try_state::<crate::input::EnigoState>() {
+                if let Ok(mut enigo) = state.0.lock() {
+                    if let Err(e) = crate::input::send_copy_ctrl_c(&mut enigo) {
+                        warn!("Cleanup hotkey: copy keystroke failed: {e}");
+                    }
+                }
+            }
+        }
+        // Let the OS place the selection on the clipboard.
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        let selected = clipboard.read_text().unwrap_or_default();
+        (original, selected)
+    })
+    .await
+    .map_err(|e| format!("cleanup copy task failed: {e}"))?;
+
+    // No selection: Ctrl+C left the clipboard unchanged. Restore and bail quietly.
+    if selected.trim().is_empty() || selected == original {
+        debug!("Cleanup hotkey: no selection detected — nothing to do");
+        let app_c = app.clone();
+        let orig = original.clone();
+        let _ = tauri::async_runtime::spawn_blocking(move || {
+            let _ = app_c.clipboard().write_text(&orig);
+        })
+        .await;
+        return Ok(());
+    }
+
+    // Phase 2 (async): prefer the configured post-process LLM (fuller grammar/spelling cleanup); when none
+    // is configured (or it fails/returns nothing), fall back to the deterministic mechanical cleanup so the
+    // hotkey is always useful with zero setup.
+    let settings = get_settings(app);
+    let cleaned = match cleanup_with_llm(&settings, &selected).await {
+        Some(llm) if !llm.trim().is_empty() => llm,
+        _ => {
+            debug!("Cleanup hotkey: no LLM result — using deterministic cleanup");
+            crate::dotflow::cleanup::deterministic_cleanup(&selected)
+        }
+    };
+
+    // Phase 3 (blocking): paste the result over the selection (skip if unchanged), then restore the user's
+    // original clipboard.
+    let app_c = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        if cleaned != selected && !cleaned.trim().is_empty() {
+            if let Err(e) = crate::clipboard::inject_bulk(&cleaned, &app_c) {
+                warn!("Cleanup hotkey: paste failed: {e}");
+            }
+        } else {
+            debug!("Cleanup hotkey: text already clean — nothing to paste");
+        }
+        let _ = app_c.clipboard().write_text(&original);
+    })
+    .await
+    .map_err(|e| format!("cleanup paste task failed: {e}"))?;
+
+    Ok(())
+}
+
+/// Clean-up-selected-text hotkey action. One-shot (like Cancel): all work happens on press.
+struct CleanupSelectionAction;
+
+impl ShortcutAction for CleanupSelectionAction {
+    fn start(&self, app: &AppHandle, _binding_id: &str, _shortcut_str: &str) {
+        let app = app.clone();
+        tauri::async_runtime::spawn(async move {
+            if let Err(e) = cleanup_selection(&app).await {
+                warn!("Cleanup selection failed: {e}");
+            }
+        });
+    }
+
+    fn stop(&self, _app: &AppHandle, _binding_id: &str, _shortcut_str: &str) {}
+}
+
 // Static Action Map
 pub static ACTION_MAP: Lazy<HashMap<String, Arc<dyn ShortcutAction>>> = Lazy::new(|| {
     let mut map = HashMap::new();
@@ -904,6 +1018,10 @@ pub static ACTION_MAP: Lazy<HashMap<String, Arc<dyn ShortcutAction>>> = Lazy::ne
     map.insert(
         "test".to_string(),
         Arc::new(TestAction) as Arc<dyn ShortcutAction>,
+    );
+    map.insert(
+        "cleanup_selection".to_string(),
+        Arc::new(CleanupSelectionAction) as Arc<dyn ShortcutAction>,
     );
     map
 });

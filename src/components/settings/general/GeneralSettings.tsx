@@ -26,6 +26,8 @@ export const GeneralSettings: React.FC = () => {
         {!isLinux && !pushToTalk && (
           <ShortcutInput shortcutId="cancel" grouped={true} />
         )}
+        {/* DotFlow: clean up the currently-selected text via the post-process LLM */}
+        <ShortcutInput shortcutId="cleanup_selection" grouped={true} />
       </SettingsGroup>
       <ModelSettingsCard />
       <SettingsGroup title={t("settings.sound.title")}>

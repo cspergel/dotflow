@@ -184,6 +184,10 @@
           "transcribe_with_post_process": {
             "name": "Бърз клавиш за постобработка",
             "description": "По избор: отделна комбинация, която винаги прилага ИИ постобработка върху транскрипцията."
+          },
+          "cleanup_selection": {
+            "name": "Clean Up Selected Text",
+            "description": "Copies the selected text, cleans it up (basic fixes by default, or your post-processing AI if configured), and pastes it back over the selection."
           }
         },
         "errors": {
