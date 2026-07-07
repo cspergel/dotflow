@@ -21,7 +21,8 @@
       "dictate": "Dictate",
       "review": "Review",
       "system": "System"
-    }
+    },
+    "cleanup": "Cleanup"
   },
   "onboarding": {
     "subtitle": "首先，請選擇一種模型",

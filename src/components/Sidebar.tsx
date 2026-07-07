@@ -8,6 +8,7 @@ import {
   Sparkles,
   Cpu,
   MessageSquareText,
+  WandSparkles,
 } from "lucide-react";
 import HandyHand from "./icons/HandyHand";
 import { useSettings } from "../hooks/useSettings";
@@ -20,6 +21,7 @@ import {
   PostProcessingSettings,
   ModelsSettings,
   PhrasesSettings,
+  CleanupSettings,
 } from "./settings";
 
 export type SidebarSection = keyof typeof SECTIONS_CONFIG;
@@ -56,6 +58,13 @@ export const SECTIONS_CONFIG = {
     labelKey: "sidebar.phrases",
     icon: MessageSquareText,
     component: PhrasesSettings,
+    enabled: () => true,
+    group: "dictate",
+  },
+  cleanup: {
+    labelKey: "sidebar.cleanup",
+    icon: WandSparkles,
+    component: CleanupSettings,
     enabled: () => true,
     group: "dictate",
   },

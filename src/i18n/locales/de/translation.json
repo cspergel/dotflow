@@ -21,7 +21,8 @@
       "dictate": "Dictate",
       "review": "Review",
       "system": "System"
-    }
+    },
+    "cleanup": "Cleanup"
   },
   "onboarding": {
     "subtitle": "Wähle ein Transkriptionsmodell, um loszulegen",

@@ -909,38 +909,76 @@ async fn cleanup_with_llm(settings: &AppSettings, input: &str) -> Option<String>
     post_process_transcription(&s, input).await
 }
 
+/// Resolve the best available cleanup for `text`: the post-process LLM if one is configured (fuller
+/// grammar/spelling), otherwise the offline Harper grammar pass followed by the deterministic mechanical
+/// tidy. Shared by the cleanup hotkey and the in-app "Try it" preview so they behave identically.
+pub(crate) async fn resolve_cleanup(settings: &AppSettings, text: &str) -> String {
+    match cleanup_with_llm(settings, text).await {
+        Some(llm) if !llm.trim().is_empty() => llm,
+        _ => {
+            // Offline path: Harper does real grammar/spelling corrections, then the deterministic pass tidies
+            // whitespace, punctuation spacing, and sentence capitalization on top.
+            let grammar = crate::dotflow::grammar::harper_cleanup(text);
+            crate::dotflow::cleanup::deterministic_cleanup(&grammar)
+        }
+    }
+}
+
 /// The "clean up selected text" hotkey pipeline: copy the selection, run it through the post-process LLM
 /// with the cleanup prompt, paste the result over the selection, and restore the user's original clipboard.
 /// The synchronous clipboard/keystroke work runs on a blocking thread; only the LLM call is awaited.
 async fn cleanup_selection(app: &AppHandle) -> Result<(), String> {
     use tauri_plugin_clipboard_manager::ClipboardExt;
 
-    // Phase 1 (blocking): remember the clipboard, copy the current selection, read it back.
+    // A near-impossible clipboard marker: we prime the clipboard with it, then watch for our synthetic Ctrl+C
+    // to overwrite it. This detects the copy landing even if the selection equals the previous clipboard, and
+    // distinguishes "nothing selected" (marker survives) from a real copy.
+    const SENTINEL: &str = "\u{2063}\u{2063}dotflow-clip-sentinel\u{2063}\u{2063}";
+
+    // Phase 1 (blocking): wait for the user to let go of the trigger keys, copy the selection, read it back.
     let app_c = app.clone();
     let (original, selected) = tauri::async_runtime::spawn_blocking(move || {
         let clipboard = app_c.clipboard();
         let original = clipboard.read_text().unwrap_or_default();
+
+        // The user is usually still holding the trigger combo (e.g. Ctrl+Shift+U). Synthetic key-ups don't
+        // stick while keys are physically held, so WAIT for a real release — otherwise our Ctrl+C lands as
+        // Ctrl+Shift+C and copies nothing (the "works 1 in 10" race).
+        crate::input::wait_for_modifiers_released(1000);
+
+        let _ = clipboard.write_text(SENTINEL);
+
         {
             // Guard so the typed expander ignores our synthetic Ctrl+C.
             let _guard = crate::clipboard::injection_guard();
             if let Some(state) = app_c.try_state::<crate::input::EnigoState>() {
                 if let Ok(mut enigo) = state.0.lock() {
+                    crate::input::release_modifiers(&mut enigo);
+                    std::thread::sleep(std::time::Duration::from_millis(30));
                     if let Err(e) = crate::input::send_copy_ctrl_c(&mut enigo) {
                         warn!("Cleanup hotkey: copy keystroke failed: {e}");
                     }
                 }
             }
         }
-        // Let the OS place the selection on the clipboard.
-        std::thread::sleep(std::time::Duration::from_millis(150));
-        let selected = clipboard.read_text().unwrap_or_default();
+
+        // Poll until the copy overwrites the sentinel (up to ~700 ms), rather than a fixed guess.
+        let mut selected = String::new();
+        for _ in 0..35 {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            let cur = clipboard.read_text().unwrap_or_default();
+            if cur != SENTINEL {
+                selected = cur;
+                break;
+            }
+        }
         (original, selected)
     })
     .await
     .map_err(|e| format!("cleanup copy task failed: {e}"))?;
 
-    // No selection: Ctrl+C left the clipboard unchanged. Restore and bail quietly.
-    if selected.trim().is_empty() || selected == original {
+    // No selection: the copy never overwrote the sentinel. Restore and bail quietly.
+    if selected.trim().is_empty() || selected == SENTINEL {
         debug!("Cleanup hotkey: no selection detected — nothing to do");
         let app_c = app.clone();
         let orig = original.clone();
@@ -951,17 +989,9 @@ async fn cleanup_selection(app: &AppHandle) -> Result<(), String> {
         return Ok(());
     }
 
-    // Phase 2 (async): prefer the configured post-process LLM (fuller grammar/spelling cleanup); when none
-    // is configured (or it fails/returns nothing), fall back to the deterministic mechanical cleanup so the
-    // hotkey is always useful with zero setup.
+    // Phase 2 (async): run the shared cleanup pipeline.
     let settings = get_settings(app);
-    let cleaned = match cleanup_with_llm(&settings, &selected).await {
-        Some(llm) if !llm.trim().is_empty() => llm,
-        _ => {
-            debug!("Cleanup hotkey: no LLM result — using deterministic cleanup");
-            crate::dotflow::cleanup::deterministic_cleanup(&selected)
-        }
-    };
+    let cleaned = resolve_cleanup(&settings, &selected).await;
 
     // Phase 3 (blocking): paste the result over the selection (skip if unchanged), then restore the user's
     // original clipboard.
@@ -987,6 +1017,7 @@ struct CleanupSelectionAction;
 
 impl ShortcutAction for CleanupSelectionAction {
     fn start(&self, app: &AppHandle, _binding_id: &str, _shortcut_str: &str) {
+        log::info!("Clean-up-selection hotkey fired");
         let app = app.clone();
         tauri::async_runtime::spawn(async move {
             if let Err(e) = cleanup_selection(&app).await {

@@ -21,7 +21,8 @@
       "dictate": "Dictate",
       "review": "Review",
       "system": "System"
-    }
+    },
+    "cleanup": "Cleanup"
   },
   "onboarding": {
     "subtitle": "请选择一个转录模型以开始使用",

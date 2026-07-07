@@ -21,7 +21,8 @@
       "dictate": "Dictate",
       "review": "Review",
       "system": "System"
-    }
+    },
+    "cleanup": "Cleanup"
   },
   "onboarding": {
     "subtitle": "Başlamak için bir transkripsiyon modeli seçin",

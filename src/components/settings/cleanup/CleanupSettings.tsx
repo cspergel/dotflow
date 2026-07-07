@@ -1,0 +1,117 @@
+import React, { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
+import { SettingsGroup } from "../../ui/SettingsGroup";
+import { SettingContainer } from "../../ui/SettingContainer";
+import { Button } from "../../ui/Button";
+import { ShortcutInput } from "../ShortcutInput";
+import { commands } from "@/bindings";
+
+// DotFlow: the Text Cleanup section — the home for the "clean up selected text" hotkey and (soon) its
+// dictionaries, post-dictation auto-clean, and live trailing corrector. The "Try it" box runs the exact
+// cleanup pipeline the hotkey uses, so it can be used/verified without the global hotkey.
+export const CleanupSettings: React.FC = () => {
+  const { t } = useTranslation();
+  const [aiConfigured, setAiConfigured] = useState(false);
+  const [input, setInput] = useState("this is an  test ,it has recieve  erors");
+  const [output, setOutput] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    commands
+      .postProcessIsConfigured()
+      .then(setAiConfigured)
+      .catch(() => setAiConfigured(false));
+  }, []);
+
+  const runCleanup = async () => {
+    setBusy(true);
+    try {
+      const res = await commands.previewCleanup(input);
+      if (res.status === "ok") {
+        setOutput(res.data);
+      } else {
+        setOutput(`Error: ${res.error}`);
+      }
+    } catch (e) {
+      setOutput(`Error: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="max-w-3xl w-full mx-auto space-y-6">
+      <div>
+        <h1 className="text-xl font-semibold tracking-[-0.02em] mb-1.5">
+          {t("settings.cleanup.title", "Text Cleanup")}
+        </h1>
+        <p className="text-[13px] text-muted">
+          {t(
+            "settings.cleanup.description",
+            "Clean up selected text in any app with a global hotkey — spelling, grammar, and formatting. Works fully offline; upgrades automatically if you configure an AI provider.",
+          )}
+        </p>
+      </div>
+
+      <SettingsGroup title={t("settings.cleanup.groups.hotkey", "Hotkey")}>
+        <ShortcutInput shortcutId="cleanup_selection" grouped={true} />
+        <SettingContainer
+          title={t("settings.cleanup.engine.title", "Cleanup engine")}
+          description={t(
+            "settings.cleanup.engine.description",
+            "Offline grammar & spelling (Harper) by default. Configure an AI provider under Post-Processing for a fuller, context-aware cleanup — the hotkey uses it automatically.",
+          )}
+          descriptionMode="tooltip"
+          grouped={true}
+        >
+          <span
+            className={`text-xs font-medium px-2.5 py-1 rounded-md whitespace-nowrap ${
+              aiConfigured
+                ? "bg-accent-tint text-accent"
+                : "bg-inset text-muted"
+            }`}
+          >
+            {aiConfigured
+              ? t("settings.cleanup.engine.ai", "AI post-processing")
+              : t("settings.cleanup.engine.offline", "Offline (Harper)")}
+          </span>
+        </SettingContainer>
+      </SettingsGroup>
+
+      <SettingsGroup title={t("settings.cleanup.groups.tryIt", "Try it")}>
+        <div className="p-4 space-y-3">
+          <textarea
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            rows={3}
+            spellCheck={false}
+            className="w-full px-3 py-2 text-sm bg-inset border border-hairline-strong rounded-lg focus:outline-none focus:ring-2 focus:ring-accent/35 resize-y"
+          />
+          <div className="flex items-center gap-3">
+            <Button
+              variant="primary"
+              size="md"
+              onClick={runCleanup}
+              disabled={busy || input.trim().length === 0}
+            >
+              {busy
+                ? t("settings.cleanup.cleaning", "Cleaning…")
+                : t("settings.cleanup.clean", "Clean up")}
+            </Button>
+            <span className="text-xs text-faint">
+              {t(
+                "settings.cleanup.tryHint",
+                "Runs the same pipeline as the hotkey.",
+              )}
+            </span>
+          </div>
+          {output !== null && (
+            <div className="px-3 py-2 text-sm bg-panel border border-hairline rounded-lg whitespace-pre-wrap">
+              {output || t("settings.cleanup.noOutput", "(no change)")}
+            </div>
+          )}
+        </div>
+      </SettingsGroup>
+    </div>
+  );
+};

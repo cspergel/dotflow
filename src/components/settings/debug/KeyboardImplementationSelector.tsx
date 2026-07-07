@@ -8,7 +8,9 @@ import { toast } from "sonner";
 
 const KEYBOARD_IMPLEMENTATION_OPTIONS: DropdownOption[] = [
   { value: "tauri", label: "Tauri Global Shortcut" },
-  { value: "handy_keys", label: "Handy Keys" },
+  // "handy_keys" is the internal value (the rdev-based low-level backend, from the handy-keys crate) — keep
+  // it; only the user-facing label is de-branded for DotFlow.
+  { value: "handy_keys", label: "DotFlow Keys" },
 ];
 
 interface KeyboardImplementationSelectorProps {
