@@ -16,7 +16,12 @@
     "debug": "تصحيح الأخطاء",
     "about": "حول",
     "models": "النماذج",
-    "phrases": "Phrases"
+    "phrases": "Phrases",
+    "groups": {
+      "dictate": "Dictate",
+      "review": "Review",
+      "system": "System"
+    }
   },
   "onboarding": {
     "subtitle": "للبدء، اختر نموذج التفريغ الصوتي",

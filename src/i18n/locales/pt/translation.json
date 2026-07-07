@@ -16,7 +16,12 @@
     "postProcessing": "Pós-Processamento",
     "history": "Histórico",
     "debug": "Depuração",
-    "about": "Sobre"
+    "about": "Sobre",
+    "groups": {
+      "dictate": "Dictate",
+      "review": "Review",
+      "system": "System"
+    }
   },
   "onboarding": {
     "subtitle": "Para começar, escolha um modelo de transcrição",

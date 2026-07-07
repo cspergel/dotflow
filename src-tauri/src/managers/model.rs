@@ -22,6 +22,33 @@ use std::time::{Duration, Instant};
 use tar::Archive;
 use tauri::{AppHandle, Emitter, Manager};
 
+/// DotFlow: the curated model picker — the only catalog models we surface (plus anything the user has
+/// downloaded or added, see `get_available_models`). Parakeet V3/V2 are the streaming core (the Dragon-feel
+/// field streaming + typed expander require a streaming model); Whisper Small/Turbo/Large-v3 are the CPU
+/// batch options; the Moonshine V2 streaming trio is a lightweight English-only streaming alternative. All
+/// are GGUF (transcribe-cpp, CPU) — matching DotFlow's default (`parakeet-tdt-0.6b-v3-gguf`).
+///
+/// These are the HF **repo ids**. A registry entry's id is `"{repo_id}/{filename}"` (see
+/// `catalog::ModelDescriptor::from`), so we match by repo-id prefix, not exact equality.
+const DOTFLOW_MODEL_REPOS: &[&str] = &[
+    "handy-computer/parakeet-tdt-0.6b-v3-gguf",
+    "handy-computer/parakeet-tdt-0.6b-v2-gguf",
+    "handy-computer/whisper-small-gguf",
+    "handy-computer/whisper-large-v3-turbo-gguf",
+    "handy-computer/whisper-large-v3-gguf",
+    "handy-computer/moonshine-streaming-tiny-gguf",
+    "handy-computer/moonshine-streaming-small-gguf",
+    "handy-computer/moonshine-streaming-medium-gguf",
+];
+
+/// True if a registry model id belongs to one of the curated DotFlow repos (exact repo id, or a
+/// `"{repo}/{filename}"` entry under it).
+fn is_dotflow_curated(id: &str) -> bool {
+    DOTFLOW_MODEL_REPOS
+        .iter()
+        .any(|repo| id == *repo || id.starts_with(&format!("{repo}/")))
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub enum EngineType {
     /// Any GGML/GGUF model loaded through transcribe-cpp (Whisper, Parakeet,
@@ -1090,6 +1117,12 @@ impl ModelManager {
             let models = self.available_models.lock().unwrap();
             models.values().cloned().collect()
         };
+        // DotFlow: trim the picker to the models that fit our CPU / streaming setup — the Parakeet streaming
+        // core (the Dragon feel + typed expander need a streaming model), a Whisper CPU batch trio, and the
+        // Moonshine V2 English-streaming family. Handy's wider catalog (Canary, Cohere, Voxtral, Qwen, Granite,
+        // GigaAM, SenseVoice, Nemotron, Fun-ASR, foreign-language and legacy Whisper variants, …) is hidden to
+        // keep the list focused. Anything the user has actually downloaded or added stays visible regardless.
+        list.retain(|m| is_dotflow_curated(&m.id) || m.is_downloaded || m.is_custom);
         // Stable, reasonable order: catalog editorial rank first (lower = higher
         // priority), then any other recommended model, then by accuracy, speed,
         // and name. `ModelInfo` doesn't carry rank, so resolve it by id from the

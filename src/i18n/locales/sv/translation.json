@@ -16,7 +16,12 @@
     "postProcessing": "Efterbearbetning",
     "history": "Historik",
     "debug": "Felsökning",
-    "about": "Om"
+    "about": "Om",
+    "groups": {
+      "dictate": "Dictate",
+      "review": "Review",
+      "system": "System"
+    }
   },
   "onboarding": {
     "subtitle": "För att komma igång, välj en transkriptionsmodell",

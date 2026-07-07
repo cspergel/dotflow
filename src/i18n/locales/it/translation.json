@@ -16,7 +16,12 @@
     "postProcessing": "Post-Elaborazione",
     "history": "Cronologia",
     "debug": "Debug",
-    "about": "Informazioni"
+    "about": "Informazioni",
+    "groups": {
+      "dictate": "Dictate",
+      "review": "Review",
+      "system": "System"
+    }
   },
   "onboarding": {
     "subtitle": "Per cominciare, scegli un modello di riconoscimento vocale",

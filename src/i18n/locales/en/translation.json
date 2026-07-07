@@ -16,7 +16,12 @@
     "postProcessing": "Post Process",
     "history": "History",
     "debug": "Debug",
-    "about": "About"
+    "about": "About",
+    "groups": {
+      "dictate": "Dictate",
+      "review": "Review",
+      "system": "System"
+    }
   },
   "onboarding": {
     "subtitle": "To get started, choose a transcription model",

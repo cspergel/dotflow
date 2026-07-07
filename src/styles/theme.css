@@ -1,20 +1,63 @@
-/* DotFlow Colors — emerald accent */
+/* DotFlow Colors — emerald accent on a warm-cool neutral surface ladder.
+ *
+ * The "premium" of the redesign lives here: depth reads from a SURFACE LADDER (off-white canvas → white
+ * panels → inset controls), not from drop shadows. Neutrals carry a faint green bias so they read as chosen,
+ * not defaulted. Emerald (`--color-accent`) appears only where it means something: active nav, focus, an
+ * on-toggle, a primary action.
+ */
 
 :root {
-  --color-text: #0f0f0f;
-  --color-background: #fbfbfb;
-  --color-background-ui: #059669; /* buttons / active accent (white text on it) */
-  --color-logo-primary: #10b981; /* brand accent (dot + "Flow") */
+  --color-text: #14211b; /* near-black, faint green bias (not pure #000) */
+  --color-background: #f3f5f3; /* the app CANVAS — warm-cool off-white */
+  --color-panel: #ffffff; /* elevated surfaces (settings groups) float on the canvas */
+  --color-inset: #eef0ed; /* recessed control fills (inputs, kbd chips, sliders track) */
+  --color-hairline: rgba(
+    17,
+    32,
+    26,
+    0.085
+  ); /* the default 1px divider — barely there */
+  --color-hairline-strong: rgba(
+    17,
+    32,
+    26,
+    0.14
+  ); /* borders that need to read (window, inputs) */
+  --color-muted: #5f6c65; /* secondary text (descriptions) */
+  --color-faint: #8b968e; /* tertiary text (eyebrows, meta, inactive) */
+
+  --color-background-ui: #059669; /* primary accent (buttons / active) — white text on it */
+  --color-accent: #059669; /* semantic alias for the accent */
+  --color-accent-tint: rgba(
+    5,
+    150,
+    105,
+    0.09
+  ); /* accent wash: active nav bg, nested rows */
+  --color-logo-primary: #10b981; /* brighter emerald for the brand dot + small marks */
   --color-logo-stroke: #0f3d2e;
   --color-text-stroke: #f6f6f6;
-  --color-mid-gray: #808080;
+
+  --color-mid-gray: #737d77; /* legacy token (green-biased gray) — kept for un-migrated components */
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --color-text: #fbfbfb;
-    --color-background: #2c2b29;
+    --color-text: #eceeea;
+    --color-background: #161815; /* warm near-black canvas, faint green */
+    --color-panel: #1e211d; /* panels lift off the canvas */
+    --color-inset: #262a25;
+    --color-hairline: rgba(255, 255, 255, 0.075);
+    --color-hairline-strong: rgba(255, 255, 255, 0.13);
+    --color-muted: #9aa69d;
+    --color-faint: #6d786f;
+
+    --color-background-ui: #10b981;
+    --color-accent: #10b981;
+    --color-accent-tint: rgba(16, 185, 129, 0.15);
     --color-logo-primary: #34d399; /* brighter emerald pops on the dark bg */
     --color-logo-stroke: #d1fae5;
+
+    --color-mid-gray: #8b958d;
   }
 }

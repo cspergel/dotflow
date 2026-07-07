@@ -36,12 +36,12 @@ export const TitleBar: React.FC<TitleBarProps> = ({
   const win = getCurrentWindow();
 
   const ctrlBtn =
-    "flex items-center justify-center h-7 w-7 rounded-md text-text/60 hover:bg-mid-gray/10 transition-colors";
+    "flex items-center justify-center h-7 w-7 rounded-md text-faint hover:bg-text/8 hover:text-text transition-colors";
 
   return (
     <div
       data-tauri-drag-region
-      className="flex items-center gap-3 px-3 h-12 border-b border-mid-gray/15 shrink-0 select-none"
+      className="flex items-center gap-3 px-3 h-12 border-b border-hairline shrink-0 select-none"
     >
       <HandyTextLogo width={92} />
 
@@ -54,12 +54,12 @@ export const TitleBar: React.FC<TitleBarProps> = ({
           />
         </span>
         <span
-          className={`text-xs ${isDictating ? "text-logo-primary font-medium" : "text-text/55"}`}
+          className={`text-xs ${isDictating ? "text-accent font-medium" : "text-muted"}`}
         >
           {isDictating ? "Listening…" : "Ready to dictate"}
         </span>
         {key && !isDictating && (
-          <kbd className="ms-1 px-1.5 py-0.5 rounded border border-mid-gray/25 bg-mid-gray/10 font-mono text-[10px] text-text/60">
+          <kbd className="ms-1 px-1.5 py-0.5 rounded border border-hairline-strong bg-inset font-mono text-[10px] text-muted">
             {key}
           </kbd>
         )}

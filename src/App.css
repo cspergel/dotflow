@@ -1,23 +1,51 @@
 @import "tailwindcss";
 @import "./styles/theme.css";
 
+/* DotFlow interface typeface — Geist (variable), bundled locally so the UI renders identically offline. */
+@font-face {
+  font-family: "Geist";
+  src: url("./assets/fonts/Geist-Variable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
 /* Register the shared color tokens (src/styles/theme.css) as Tailwind
    utilities */
 @theme inline {
   --color-text: var(--color-text);
   --color-background: var(--color-background);
+  --color-panel: var(--color-panel);
+  --color-inset: var(--color-inset);
+  --color-hairline: var(--color-hairline);
+  --color-hairline-strong: var(--color-hairline-strong);
+  --color-muted: var(--color-muted);
+  --color-faint: var(--color-faint);
   --color-background-ui: var(--color-background-ui);
+  --color-accent: var(--color-accent);
+  --color-accent-tint: var(--color-accent-tint);
   --color-logo-primary: var(--color-logo-primary);
   --color-logo-stroke: var(--color-logo-stroke);
   --color-text-stroke: var(--color-text-stroke);
   --color-mid-gray: var(--color-mid-gray);
+
+  --font-sans:
+    "Geist", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
 }
 
 :root {
   /* Typography */
+  font-family:
+    "Geist",
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    "Segoe UI",
+    sans-serif;
   font-size: 15px;
   line-height: 24px;
   font-weight: 400;
+  letter-spacing: -0.006em; /* Geist reads a touch tighter — subtle, premium */
 
   /* Typography settings */
   font-synthesis: none;

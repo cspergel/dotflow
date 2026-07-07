@@ -325,9 +325,9 @@ function App() {
           unstyled: true,
           classNames: {
             toast:
-              "bg-background border border-mid-gray/20 rounded-lg shadow-lg px-4 py-3 flex items-center gap-3 text-sm",
+              "bg-panel border border-hairline rounded-xl shadow-lg px-4 py-3 flex items-center gap-3 text-sm",
             title: "font-medium",
-            description: "text-mid-gray",
+            description: "text-muted",
           },
         }}
       />
@@ -346,7 +346,7 @@ function App() {
         {/* Scrollable content area */}
         <div className="flex-1 flex flex-col overflow-hidden">
           <div className="flex-1 overflow-y-auto">
-            <div className="flex flex-col items-center p-4 gap-4">
+            <div className="flex flex-col items-center px-6 pt-6 pb-10 gap-4">
               <AccessibilityPermissions />
               {renderSettingsContent(currentSection)}
             </div>
