@@ -1,134 +1,150 @@
 # DotFlow — session handoff (resume here in a fresh session)
 
+> Last updated end of the 2026-07-07 session. Everything below is on `origin/main` (HEAD `3d2fae1`), clean
+> tree, CI (`code-quality` + `test`) green. Read this + [`ROADMAP.md`](./ROADMAP.md) to pick up.
+
 ## What DotFlow is
 
-A fork of **Handy** (`cjpais/Handy`, MIT; Tauri 2 + Rust + React) rebranded to **DotFlow**. Local‑first
-dictation app whose differentiators are: **live in‑field text injection as you speak** (Dragon feel),
-**dot‑phrase / voice‑alias macros**, an **editable phrase library**, and a **Dragon‑style compact UI**.
+A fork of **Handy** (`cjpais/Handy`, MIT; Tauri 2 + Rust + React) rebranded to **DotFlow**. Local‑first,
+**fully offline, privacy‑first** dictation + text tooling. Differentiators: **live in‑field dictation**
+(Dragon feel), **dot‑phrase / voice‑alias macros**, a **typed text expander**, an **editable phrase
+library**, **offline grammar/spelling cleanup + a Grammarly‑style review panel** (via Harper), and a
+premium **Linear/Raycast‑style UI**.
 
 - **Repo:** `github.com/cspergel/dotflow` (`origin`). `upstream` = `github.com/cjpais/Handy`.
-- **Local path:** `~/Documents/Coding Projects/dotflow`.
-- **Product design:** `docs/dotflow-design/DotFlow-plan-v2.md` + `DotFlow-asr-stack-research.md`.
-- **Fork maintenance:** `FORK.md` (upstream‑sync recipe + the exact list of Handy files we modified).
+- **Local path:** `~/Documents/Coding Projects/dotflow`. **Data dir:** `%APPDATA%/com.dotflow.app/`.
+- **Design docs:** `docs/dotflow-design/` — `ROADMAP.md` (the plan), `DotFlow-plan-v2.md`, this file.
+- **Fork maintenance:** `FORK.md` (upstream‑sync recipe, modified‑file list, §CI‑on‑the‑fork).
 
-## Environment / build / run
+### Commercialization direction (discussed, not built)
 
-- Toolchain: cargo (MSVC on Windows), bun, node. **No Vulkan SDK** → whisper `vulkan` feature dropped in
-  `src-tauri/Cargo.toml` (we use Parakeet ONNX/CPU).
-- **Build:** `cd src-tauri && export CARGO_TARGET_DIR="C:/dtfb" && cargo build` (short target dir dodges the
-  Windows 260‑char path limit).
-- **Run (dev):** `cd dotflow && export CARGO_TARGET_DIR="C:/dtfb" && bun run tauri dev` — the watcher
-  auto‑rebuilds Rust on save and HMRs the frontend. A **frameless** window / **icon** change needs a full
-  app restart (and icon needs `touch src-tauri/build.rs` to re‑embed).
-- **Tests:** `cd src-tauri && cargo test --lib dotflow` (the pure cores are unit‑tested).
-- **Frontend typecheck:** `node_modules/.bin/tsc --noEmit -p tsconfig.json`.
-- **Data dir:** `%APPDATA%/com.dotflow.app/` — `phrases.db`, `settings_store.json`, the Parakeet model.
-- **CI:** `code-quality` + `test` PASS. The heavy Handy workflows (`build`, `main-build`, `release`,
-  `nix-check`, `playwright`, `build-test`, `pr-test-build`) **fail on the fork** (need Handy's secrets/signing)
-  — recommended to disable them; **not done yet** (open task).
+Positioning: **private + offline + one‑time purchase** vs Grammarly/Dragon (cloud/subscription). Beachhead
+vertical = **medical/clinical dictation** ("Dragon Medical, but private, offline, cheaper" — PHI never
+leaves the device ⇒ no BAA/HIPAA‑cloud risk). Model: **open‑core** (free core + paid **Pro** one‑time license
 
-## What WORKS today (validated live)
+- medical/legal **dictionary/template packs** + support). Licensing is clean: **MIT (Handy) + Apache‑2.0
+  (Harper) + CC‑BY‑4.0 (Parakeet, commercial‑OK) all permit going proprietary** — just retain the notices in a
+  licenses screen (no need to rewrite code to "escape" MIT). **Audit each bundled model's license before
+  selling** (Whisper MIT ✓, Parakeet CC‑BY‑4.0 ✓; others TBD). The code isn't the moat — brand, curated domain
+  packs, polish, compliance‑by‑architecture are.
 
-- **Live field streaming** (Dragon feel): a streaming model's committed text is keystroke‑injected as you
-  speak. Char‑by‑char with a **tunable per‑char delay** (`field_stream_char_delay_ms`, default 8) + a
-  **throttle** (`field_stream_throttle_ms`, default 100) — this beats the Windows enigo key‑repeat race.
-  Whole‑word hold + command‑buffer. Gated by `experimental_field_streaming` (needs a streaming model, e.g.
-  Parakeet Unified). Sliders in Advanced → Experimental.
-- **Dot‑phrase / voice‑alias macros:** spoken triggers (`insert follow up`) or dot keys (`.fu`) expand to a
-  saved block. Matching is **case‑, punctuation‑, and hyphen‑insensitive** (Parakeet writes "follow‑up").
-- **Instant macro insert:** the finalize path pastes the resolved block via **clipboard (`inject_bulk`)** so a
-  macro drops in at once on release (streaming mid‑utterance still types word‑by‑word — accepted).
-- **Editable phrase library:** SQLite `PhraseManager` + CRUD commands + a **Phrases** settings page; edits
-  apply on the next dictation.
-- **Dragon‑style UI:** frameless window; custom **titlebar** (drag / minimize / close‑to‑tray); a compact
-  **always‑on‑top bar** (mic **amber on standby → green while dictating**, "Ready to dictate", hotkey on
-  hover, drag anywhere) that **expands** to the full app. Emerald theme, DotFlow wordmark + dot‑flow mark,
-  green app icons.
+## Environment / build / run / test
+
+- Toolchain: cargo (MSVC), bun, node. `cargo` isn't on the Bash PATH by default → `export PATH="$HOME/.cargo/bin:$PATH"`.
+- **No Vulkan SDK** → whisper `vulkan` feature dropped on x86_64‑windows; we run **Parakeet (GGUF via
+  transcribe‑cpp, CPU)** — default model is `handy-computer/parakeet-tdt-0.6b-v3-gguf`.
+- **Build:** `cd src-tauri && export CARGO_TARGET_DIR="C:/dtfb" && cargo build` (short dir dodges the Windows
+  260‑char limit). `cargo build --bin dotflow` for just the app binary.
+- **Run the built binary directly:** `"C:/dtfb/debug/dotflow.exe" --debug >/tmp/x.log 2>&1 &` — it connects
+  to the Vite dev server (`:1420`) for the frontend and HMRs frontend edits. **Backend (Rust) changes need a
+  rebuild + relaunch.**
+- **Tests:** `cd src-tauri && cargo test --lib` (188 pass as of handoff). Frontend: `node_modules/.bin/tsc
+--noEmit -p tsconfig.json`; `node_modules/.bin/eslint <files>`; `node_modules/.bin/prettier --write/--check`.
+- **CI:** only `code-quality` + `test` run on the fork (the 7 heavy Handy workflows are disabled via
+  `gh workflow disable` — see `FORK.md`). `format:check` runs prettier on the WHOLE repo incl. `.md`; the
+  translation check requires **every locale** to have every key (add new keys to all 21 locales via a script).
+
+## What WORKS today (all validated, on `origin/main`)
+
+- **Dictation** (Parakeet CPU) + **live field streaming** + **dot‑phrase/voice‑alias macros** + **editable
+  phrase library** (SQLite) + **instant macro insert**. (From the prior session; still good.)
+- **Typed text expander** (`experimental_typed_expander`, opt‑in): a global Windows Raw Input keyboard monitor
+  expands your dot‑triggers (`.fu`) in ANY app. `dotflow/typed_expander/backend.rs`. Self‑suppresses via the
+  re‑entrant `clipboard::injection_guard`. Toggle + ding‑toggle now live in the **Phrases** section.
+- **Premium redesign:** surface‑ladder tokens (off‑white canvas → white panels → inset controls, green‑biased
+  hairlines, **no shadows**), **Geist** bundled font, emerald reserved for meaning, grouped **DotFlow‑specific
+  sidebar** (DICTATE / REVIEW / SYSTEM, Phrases elevated), **super‑compact "mini" bar** tier, trimmed model
+  catalog (8 curated models). Donate + acknowledgements removed. "Handy Keys" → "DotFlow Keys".
+- **Clean‑up‑selected‑text hotkey** (`Ctrl+Shift+U`, rebindable): copies the selection → cleans it → pastes
+  back → restores clipboard. **Tiered engine:** post‑process LLM (if configured) → **Harper (offline grammar/
+  spelling)** → deterministic mechanical tidy. Reliable now (waits for modifier release before the synthetic
+  Ctrl+C; sentinel‑based copy detection).
+- **Cleanup settings section** (sidebar → Cleanup): rebindable hotkey, engine indicator (Offline/AI),
+  **"Try it"** box with **Auto‑fix** and an interactive **Review** panel.
+- **Review panel** (`ReviewPanel.tsx`): Grammarly‑style — text with issues underlined, click‑to‑accept, per‑
+  issue cards with each replacement + Ignore, Accept‑all, Copy result. Offline via Harper's `analyze_text`
+  (returns char‑span + kind + message + replacements). Stable‑offset model (analyze once; accept/ignore are
+  flags; result computed by splicing) so offsets never drift.
 
 ## Hard‑won gotchas (do NOT re‑derive)
 
-- `enigo.text()` **races on this Windows machine** (dropped/repeated keys, "ggggg") — the race is INSIDE a
-  single multi‑char call, so throttling whole calls can't fix it. **Fix = type char‑by‑char with a per‑char
-  delay** (`inject_field_edit` in `clipboard.rs`).
-- **Parakeet hyphenates** "follow up" → "follow‑up" → matching uses `canonical_words` (split on hyphens) in
-  `dotflow/phrases.rs`.
-- **Tauri v2 gates window ops** (`setSize`, `startDragging`, …) behind **capabilities** → see
-  `src-tauri/capabilities/default.json`. Missing perms fail silently.
-- **Frameless** = `decorations(false)` in `lib.rs` + custom chrome; the app **icon** is embedded at build via
-  `build.rs`, so changing `icons/` needs `touch src-tauri/build.rs` to force a re‑embed, then a full restart.
-- **CI:** `format:check` runs `prettier --check .` (WHOLE repo incl. `.md`) **&&** `cargo fmt -- --check`; the
-  translation check requires **every locale** to have every key (add new keys to all 20 non‑EN locales).
-  `code-quality` only triggers on `src/**` changes — dispatch it manually if you only changed Rust/docs.
+- **Hotkey‑triggered synthetic keys are polluted by the still‑held trigger modifiers.** `Ctrl+Shift+U` → the
+  user is holding Ctrl+Shift when we send Ctrl+C → OS sees Ctrl+Shift+C → copies nothing ("works 1 in 10").
+  **Fix:** `input::wait_for_modifiers_released()` (polls `GetAsyncKeyState`) before the copy, + `release_modifiers`.
+- **Ctrl+Alt+\* is AltGr on Windows** and gets swallowed by the layout — never use it for a global hotkey.
+- **A panic in a `tauri::async_runtime::spawn` task vanishes silently** (no log) — the action just "does
+  nothing." Harper's `harper_cleanup`/`analyze` are wrapped in `catch_unwind`. When debugging "nothing
+  happens," add an INFO log at the fire point to disambiguate "didn't fire" vs "fired then panicked".
+- **Shortcut validator now rejects modifier‑less global bindings** (a bare `l` fired on every keypress and
+  trapped the user). Escape + F‑keys exempt. `shortcut/tauri_impl.rs`.
+- **Single‑instance forwarding bites during testing:** launching `dotflow.exe` while another instance runs
+  forwards args and exits (new binary doesn't run). Always `taskkill //F //IM dotflow.exe` and confirm none
+  running before relaunching a rebuilt binary. `cargo test` can hit "os error 32" (running app locks a staged
+  DLL) → kill the app first.
+- **specta bindings** (`src/bindings.ts`) only regenerate when the app actually RUNS (debug export in
+  `run()`), not on `cargo build`/`cargo test`. When you add a command, add its binding (and any Type) to
+  `bindings.ts` by hand to use it immediately; the app will normalize it on next launch.
+- **Harper API** (`harper-core` 2.5.0): `Document::new_plain_english_curated(text)` → `LintGroup::new_curated(
+FstDictionary::curated(), Dialect::American).lint(&doc)` → `Vec<Lint{ span: Span<char>, lint_kind, message,
+suggestions }>`. `Suggestion::apply(span, &mut Vec<char>)`. Spans are CHAR offsets. Skip `LintKind::Enhancement`
+  (subjective). Apply edits back‑to‑front / non‑overlapping. `wgpu` in `cargo add`'s output was a phantom
+  (not in the normal build graph) — Harper builds clean, ~2.5 min first time.
+- **Windows 11 Notepad has built‑in autocorrect** — a user reported "instant corrections while typing"; it
+  was Notepad, not DotFlow. DotFlow has NO type‑time correction (expander only does dot‑triggers).
+- The **empty‑key `.` trigger bug** (fixed): alias‑only phrases have `key=""` → `.{key}`==`.` matched every
+  period. `PhraseTable::new` drops empty keys.
 
-## This session's work (all on `origin/main`)
+## IN PROGRESS — the next task: selection hotkey → floating review overlay
 
-Phrase pipeline (injection race fix → hyphen matching → editable library) · full rebrand (emerald theme,
-wordmark/mark, green icons, "Handy"→"DotFlow", title) · Dragon‑style shell (frameless + custom titlebar +
-compact bar + window resize + `dictation-state` color signal) · instant macro insert (`inject_bulk`) ·
-DotFlow README + `FORK.md` · CI fixes (translations/eslint/prettier/cargo fmt green) · ported 2 upstream Handy
-fixes (`0a59e1f` ampersands, `cdb4633` overlay) · **typed‑expander step 1**.
+**Goal (agreed):** a 2nd hotkey grabs the current selection (or whole field) → a small **always‑on‑top
+DotFlow window pops near the cursor** showing the **review panel** → user accepts fixes → pastes back. This is
+the "edit where I am" answer (a floating card, NOT literal in‑app editing — that's deferred). Model the UX on
+**WritingTools** (studied, GPL — don't copy code): an **action menu** (Proofread=Harper offline / Rewrite /
+Formal / Summarize=LLM tiers), cursor‑anchored popup, **single Ctrl+Z reverts** the paste.
 
-## IN PROGRESS — Typed text expander (Beeftext/Espanso‑style)
+Build notes (the review panel + engine already exist — this is the window + plumbing):
 
-Goal: type a dot‑trigger (`.fu`) in **any** app and it's replaced by your saved text — the **same phrase
-library** that powers spoken triggers. **Architecture decision (from research):** build a global‑input
-expander **modeled on Espanso** (Espanso is Rust but **GPL‑3.0 → study/mirror, do NOT link its crates**;
-Beeftext is **MIT**). Reject the IME approach for v1 (Windows TSF is heavy + forces input‑source switching).
+- New binding `review_selection` (give it a modifier combo; **not** Ctrl+Alt+\*). Action mirrors
+  `cleanup_selection`'s copy phase (wait‑for‑release + sentinel copy) but instead of auto‑pasting, it opens
+  the overlay window with the selected text.
+- **Overlay window:** a small always‑on‑top, frameless Tauri window (there's precedent — the recording
+  `overlay/` window + the frameless main window). Route the selected text to it (Tauri event/command), render
+  `ReviewPanel`, and on "Apply" paste the result via `clipboard::inject_bulk` (reuse the guard + restore).
+- **Also wire post‑dictation review:** after a dictation finalizes, optionally pop the same overlay with the
+  transcript for review before insertion (setting‑gated).
+- Keep it isolated so the same panel serves: Try‑it box (done), selection overlay, post‑dictation.
 
-**Step 1 — DONE (commit `8c4eb61`), off by default, dictation untouched:**
+## Roadmap / tiering / future (see ROADMAP.md §5 for detail)
 
-- Setting `experimental_typed_expander` (default OFF).
-- **Self‑injection suppression flag** in `clipboard.rs`: `is_injecting()` + an `InjectGuard` raised around
-  every injection (`inject_field_edit`, `inject_bulk`, `inject_text_raw`, `paste`). The future keyboard
-  monitor checks this and drops all input while raised → DotFlow can never re‑trigger itself. No‑op today.
-- **Pure, tested core:** `dotflow::typed_expander::ExpanderBuffer` (rolling buffer + push/backspace/reset/
-  consume) and `PhraseTable::match_typed_trigger` (dot‑trigger suffix match, case‑insensitive, longest‑key‑
-  wins). 8 unit tests.
+The cleanup engine is a **ladder**: (1) deterministic mechanical ✅ → (2) **Harper** rule‑based offline ✅ →
+(3) **ML GEC** (export CoEdIT/GECToR to ONNX, run on the `ort` runtime we already ship — the "post‑ML" tier,
+catches contextual errors; Gramformer is the concept ref) ⏳ → (4) **LLM** (local Ollama / cloud) ✅.
 
-**NEXT — Step 2/3: the Windows Raw Input backend (the actual keyboard monitor).** Build spec (from research,
-so you don't have to re‑research):
+Backlog, roughly ordered: selection overlay + post‑dictation review (**next**) · **medical/legal dictionary
+packs** (toggleable; `hunspell-en-med-glut` ~90k terms, small — bundle or download‑on‑demand) · **ML GEC
+tier** · **terminal mode** (tuipo is the blueprint — Rust, MIT/Apache, pseudo‑terminal + **Harper** underlines,
+skips code patterns; on‑demand review good, live auto‑correct in terminals = bad) · **Chrome extension**
+(deferred; ai‑grammar is the ref — MIT, Chrome built‑in AI / Ollama) · **phone‑as‑microphone** · Mac support
+(the expander/raw‑input is Windows‑only) · weekly upstream sync (last: `0a59e1f`).
 
-- **Detect via Raw Input, NOT `WH_KEYBOARD_LL`** (a slow LL hook lags the whole system + Windows can drop it).
-  Use the `windows` crate: `RegisterRawInputDevices` (keyboard, `RIDEV_INPUTSINK`) + a **message‑only hidden
-  window** + `WM_INPUT` pumped with `GetMessage` on a **dedicated native thread** (not the Tauri thread).
-  Decode characters with `ToUnicodeEx` (full keyboard state) — Raw Input gives keys, you reconstruct chars.
-- **Feed** printable chars → `ExpanderBuffer::push`; Backspace → `backspace`; Enter/Tab/Esc + arrow/nav keys +
-  mouse click + **window‑focus change** (`SetWinEventHook EVENT_SYSTEM_FOREGROUND`) → `reset`.
-- **On `matched()`:** if `!clipboard::is_injecting()`, raise the guard, **`SendInput` N× `VK_BACK`** to erase
-  the `.key`, then paste the expansion via **`inject_bulk`** (instant, reuses what's built), then
-  `buffer.consume(N)`. Keep the buffer's suppression tight (a small trailing settle after emit so async
-  `WM_INPUT` for our own keys doesn't leak — or filter by HID source like Espanso).
-- **Wire‑up:** start the monitor thread only when `experimental_typed_expander` is on (start on setting‑on,
-  stop on setting‑off); a UI toggle in Advanced → Experimental with an explicit "monitors your typing" note.
-- **Keep it isolated** in `dotflow/typed_expander/` behind a trait so mac/Linux backends can follow later.
-
-## Roadmap / backlog (agreed)
-
-1. **Typed expander backend** (next — spec above).
-2. **Premium redesign** of the full/expanded window — the Linear/Raycast look: surface‑ladder colors + 1px
-   hairline borders + **no drop shadows** + **medium‑weight (500) headings, tight tracking** + constrained
-   content width (~640–720px) + settings as **grouped hairline‑separated rows** (not card‑per‑setting). (Full
-   research spec was captured in‑session; re‑fetch if needed.)
-3. **"Clean up selected text" hotkey** — a 2nd hotkey that sends the SELECTED text (typed or not) to the
-   **post‑process LLM** (Ctrl+C → read clipboard → LLM cleanup prompt → paste result). Reuses existing
-   post‑processing infra + clipboard. (Note: the ASR model doesn't clean text; the post‑process LLM does.)
-4. **Phone‑as‑microphone** (likely last) — a local server in DotFlow serves a web page; the phone opens it on
-   the LAN (QR pair), grants mic, **streams audio over WebSocket** to the desktop → existing transcribe
-   pipeline. Browser‑based, no app‑store app.
-5. **Weekly upstream sync** — `git fetch upstream && git log --oneline <last>..upstream/main`, cherry‑pick
-   worthwhile fixes, rebuild+test. **Last synced: `0a59e1f`** (see `FORK.md`).
-6. **Disable the noisy Handy CI workflows** (keep `code-quality` + `test`).
+**Repos reviewed this session (inspiration; note licenses):** WritingTools (GPL — study only, UX north star)
+· ClipSlop (MIT — prompt chaining idea) · tuipo (MIT/Apache — terminal + Harper blueprint) · Gramformer
+(MIT — ML GEC concept) · ai‑grammar (MIT — Chrome ext ref). GrammarFixer (basic, skip).
 
 ## Key files
 
-- Rust product core: `src-tauri/src/dotflow/` — `phrases.rs` (expand + matching), `field_stream.rs`,
-  `punctuation.rs`, `typed_expander/mod.rs`, `mod.rs` (`process_clause`, `starter_pack`, `wedge_table`).
-- `src-tauri/src/managers/phrases.rs` (SQLite library) · `commands/phrases.rs` (CRUD).
-- Injection: `src-tauri/src/clipboard.rs` (`inject_field_edit` char‑by‑char, `inject_bulk` clipboard,
-  `is_injecting`/`InjectGuard`). Dictation stop path + `dictation-state` event: `src-tauri/src/actions.rs`.
-  Field‑streaming hooks: `src-tauri/src/managers/transcription.rs`. Settings: `src-tauri/src/settings.rs`.
-  Window/frameless/commands: `src-tauri/src/lib.rs`. Perms: `src-tauri/capabilities/default.json`.
-- Frontend: `src/App.tsx` (view modes + resize + `dictation-state`), `src/components/DragonBar.tsx`,
-  `TitleBar.tsx`, `Sidebar.tsx`, `settings/phrases/PhrasesSettings.tsx`, `settings/FieldStream*.tsx`,
-  `icons/HandyTextLogo.tsx` (wordmark) + `HandyHand.tsx` (mark), `styles/theme.css` (emerald),
-  `icon-source.png` (brand source → `bunx @tauri-apps/cli icon icon-source.png`).
+- **Grammar/cleanup:** `src-tauri/src/dotflow/grammar.rs` (Harper: `harper_cleanup` + `analyze` + `TextSuggestion`,
+  panic‑safe) · `dotflow/cleanup.rs` (deterministic, tested) · `actions.rs` (`resolve_cleanup`, the cleanup
+  hotkey action, `wait_for_modifiers_released`/sentinel copy) · `commands/cleanup.rs` (`preview_cleanup`,
+  `analyze_text`, `post_process_is_configured`) · `input.rs` (`send_copy_ctrl_c`, `release_modifiers`,
+  `wait_for_modifiers_released`).
+- **Cleanup UI:** `src/components/settings/cleanup/CleanupSettings.tsx` + `ReviewPanel.tsx`.
+- **Typed expander:** `src-tauri/src/dotflow/typed_expander/{mod.rs,backend.rs}`; toggles now in
+  `settings/phrases/PhrasesSettings.tsx` (`TypedExpander.tsx`, `TypedExpanderSound.tsx`).
+- **Shortcuts:** `src-tauri/src/shortcut/{tauri_impl.rs (validate + register),handler.rs}`; bindings +
+  `ACTION_MAP` in `actions.rs`; defaults in `settings.rs` (`get_default_settings`).
+- **Injection:** `clipboard.rs` (`is_injecting`/`injection_guard` re‑entrant counter, `inject_bulk`,
+  `inject_field_edit`). **Redesign tokens:** `src/styles/theme.css` + `src/App.css` (`@theme`, Geist `@font-face`).
+- **Sidebar/IA:** `src/components/Sidebar.tsx` (`SECTIONS_CONFIG` + groups). **View modes:** `src/App.tsx`
+  (full / bar / mini). **Model catalog trim:** `src-tauri/src/managers/model.rs` (`DOTFLOW_MODEL_REPOS`).
+- **Fonts:** `src/assets/fonts/Geist-Variable.woff2` (+ `NOTICE.md`).
