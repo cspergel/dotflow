@@ -46,3 +46,6 @@ result
 # DotFlow: scratch mutation-testing crate + cargo-mutants output
 verify/
 mutants.out*
+
+# Screenshots dropped in the repo root
+Screenshot*.png

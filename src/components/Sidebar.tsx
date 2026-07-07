@@ -1,7 +1,6 @@
 import React from "react";
 import { useTranslation } from "react-i18next";
 import { Cog, FlaskConical, History, Info, Sparkles, Cpu, MessageSquareText } from "lucide-react";
-import HandyTextLogo from "./icons/HandyTextLogo";
 import HandyHand from "./icons/HandyHand";
 import { useSettings } from "../hooks/useSettings";
 import {
@@ -100,34 +99,32 @@ export const Sidebar: React.FC<SidebarProps> = ({
     .map(([id, config]) => ({ id: id as SidebarSection, ...config }));
 
   return (
-    <div className="flex flex-col w-40 h-full border-e border-mid-gray/20 items-center px-2">
-      <HandyTextLogo width={120} className="m-4" />
-      <div className="flex flex-col w-full items-center gap-1 pt-2 border-t border-mid-gray/20">
-        {availableSections.map((section) => {
-          const Icon = section.icon;
-          const isActive = activeSection === section.id;
+    <div className="flex flex-col w-44 h-full border-e border-mid-gray/15 px-2 py-3 gap-0.5">
+      {availableSections.map((section) => {
+        const Icon = section.icon;
+        const isActive = activeSection === section.id;
 
-          return (
-            <div
-              key={section.id}
-              className={`flex gap-2 items-center p-2 w-full rounded-lg cursor-pointer transition-colors ${
-                isActive
-                  ? "bg-logo-primary/80"
-                  : "hover:bg-mid-gray/20 hover:opacity-100 opacity-85"
-              }`}
-              onClick={() => onSectionChange(section.id)}
-            >
-              <Icon width={24} height={24} className="shrink-0" />
-              <p
-                className="text-sm font-medium truncate"
-                title={t(section.labelKey)}
-              >
-                {t(section.labelKey)}
-              </p>
-            </div>
-          );
-        })}
-      </div>
+        return (
+          <div
+            key={section.id}
+            className={`flex gap-2.5 items-center px-2.5 py-2 w-full rounded-md cursor-pointer transition-colors text-sm ${
+              isActive
+                ? "bg-mid-gray/12 text-text font-medium"
+                : "text-text/55 hover:bg-mid-gray/8 hover:text-text/90"
+            }`}
+            onClick={() => onSectionChange(section.id)}
+          >
+            <Icon
+              width={18}
+              height={18}
+              className={`shrink-0 ${isActive ? "text-logo-primary" : ""}`}
+            />
+            <p className="truncate" title={t(section.labelKey)}>
+              {t(section.labelKey)}
+            </p>
+          </div>
+        );
+      })}
     </div>
   );
 };

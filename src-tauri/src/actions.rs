@@ -551,6 +551,8 @@ impl ShortcutAction for TranscribeAction {
         }
 
         if recording_error.is_none() {
+            // DotFlow: tell the UI dictation is active (the compact bar turns "listening").
+            let _ = app.emit("dictation-state", true);
             // Dynamically register the cancel shortcut in a separate task to avoid deadlock
             shortcut::register_cancel_shortcut(app);
         } else {
@@ -584,6 +586,8 @@ impl ShortcutAction for TranscribeAction {
     }
 
     fn stop(&self, app: &AppHandle, binding_id: &str, _shortcut_str: &str) {
+        // DotFlow: dictation ended — the compact bar returns to "ready".
+        let _ = app.emit("dictation-state", false);
         // Unregister the cancel shortcut when transcription stops
         shortcut::unregister_cancel_shortcut(app);
 

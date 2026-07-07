@@ -13,6 +13,10 @@ import AccessibilityPermissions from "./components/AccessibilityPermissions";
 import Footer from "./components/footer";
 import Onboarding, { AccessibilityOnboarding } from "./components/onboarding";
 import { Sidebar, SidebarSection, SECTIONS_CONFIG } from "./components/Sidebar";
+import { TitleBar } from "./components/TitleBar";
+import { DragonBar } from "./components/DragonBar";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { LogicalSize } from "@tauri-apps/api/dpi";
 import { WhatsNewGate } from "./components/whats-new";
 import { useSettings } from "./hooks/useSettings";
 import { useSettingsStore } from "./stores/settingsStore";
@@ -37,6 +41,31 @@ function App() {
   const [isReturningUser, setIsReturningUser] = useState(false);
   const [currentSection, setCurrentSection] =
     useState<SidebarSection>("general");
+  // Dragon-style compact bar vs the full app. Switching resizes the window.
+  const [viewMode, setViewMode] = useState<"full" | "bar">("full");
+  // Live dictation state (backend emits on record start/stop) — colors the compact bar.
+  const [isDictating, setIsDictating] = useState(false);
+
+  const applyViewMode = async (mode: "full" | "bar") => {
+    setViewMode(mode);
+    try {
+      const win = getCurrentWindow();
+      if (mode === "bar") {
+        // Lower the min BEFORE shrinking, or the window is clamped to the full size.
+        await win.setMinSize(new LogicalSize(300, 40));
+        await win.setResizable(false);
+        await win.setSize(new LogicalSize(360, 44));
+        await win.setAlwaysOnTop(true);
+      } else {
+        await win.setAlwaysOnTop(false);
+        await win.setResizable(true);
+        await win.setMinSize(new LogicalSize(560, 480));
+        await win.setSize(new LogicalSize(680, 570));
+      }
+    } catch (e) {
+      console.warn("Failed to resize window for view mode:", e);
+    }
+  };
   const { settings, updateSetting } = useSettings();
   const direction = getLanguageDirection(i18n.language);
   const refreshAudioDevices = useSettingsStore(
@@ -49,6 +78,16 @@ function App() {
 
   useEffect(() => {
     checkOnboardingStatus();
+  }, []);
+
+  // Track live dictation state for the compact bar (backend emits true on record start, false on stop).
+  useEffect(() => {
+    const unlisten = listen<boolean>("dictation-state", (event) => {
+      setIsDictating(event.payload);
+    });
+    return () => {
+      unlisten.then((fn) => fn());
+    };
   }, []);
 
   // Initialize RTL direction when language changes
@@ -262,6 +301,16 @@ function App() {
     return <Onboarding onModelSelected={handleModelSelected} />;
   }
 
+  // Dragon-style compact bar: just the dictation status + shortcut, expandable back to the full app.
+  if (viewMode === "bar") {
+    return (
+      <div dir={direction} className="h-screen bg-background">
+        <Toaster theme="system" />
+        <DragonBar onExpand={() => applyViewMode("full")} isDictating={isDictating} />
+      </div>
+    );
+  }
+
   return (
     <div
       dir={direction}
@@ -280,6 +329,8 @@ function App() {
         }}
       />
       <WhatsNewGate />
+      {/* Frameless custom titlebar: drag, dictation status, window controls + Compact toggle */}
+      <TitleBar onCompact={() => applyViewMode("bar")} isDictating={isDictating} />
       {/* Main content area that takes remaining space */}
       <div className="flex-1 flex overflow-hidden">
         <Sidebar

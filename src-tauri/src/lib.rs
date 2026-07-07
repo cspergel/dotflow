@@ -809,11 +809,14 @@ pub fn run(cli_args: CliArgs) {
             // for portable mode (redirects WebView2 cache to portable Data dir)
             let mut win_builder =
                 tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::App("/".into()))
-                    .title("Handy")
+                    .title("DotFlow")
                     .inner_size(680.0, 570.0)
-                    .min_inner_size(680.0, 570.0)
+                    .min_inner_size(380.0, 64.0)
                     .resizable(true)
                     .maximizable(false)
+                    // DotFlow: frameless — the app draws its own chrome (custom titlebar in the full view,
+                    // a draggable compact bar in Dragon mode). Removes the native OS titlebar entirely.
+                    .decorations(false)
                     .visible(false);
 
             if let Some(data_dir) = portable::data_dir() {
