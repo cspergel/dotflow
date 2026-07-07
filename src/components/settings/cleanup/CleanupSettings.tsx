@@ -4,6 +4,7 @@ import { SettingsGroup } from "../../ui/SettingsGroup";
 import { SettingContainer } from "../../ui/SettingContainer";
 import { Button } from "../../ui/Button";
 import { ShortcutInput } from "../ShortcutInput";
+import { ReviewPanel } from "./ReviewPanel";
 import { commands } from "@/bindings";
 
 // DotFlow: the Text Cleanup section — the home for the "clean up selected text" hotkey and (soon) its
@@ -15,6 +16,11 @@ export const CleanupSettings: React.FC = () => {
   const [input, setInput] = useState("this is an  test ,it has recieve  erors");
   const [output, setOutput] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // Interactive review: snapshot the input when "Review" is clicked so editing the box later doesn't
+  // re-analyze on every keystroke.
+  const [reviewText, setReviewText] = useState<string | null>(null);
+  const [reviewResult, setReviewResult] = useState("");
+  const [copied, setCopied] = useState(false);
 
   useEffect(() => {
     commands
@@ -24,6 +30,7 @@ export const CleanupSettings: React.FC = () => {
   }, []);
 
   const runCleanup = async () => {
+    setReviewText(null);
     setBusy(true);
     try {
       const res = await commands.previewCleanup(input);
@@ -36,6 +43,22 @@ export const CleanupSettings: React.FC = () => {
       setOutput(`Error: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setBusy(false);
+    }
+  };
+
+  const startReview = () => {
+    setOutput(null);
+    setReviewResult(input);
+    setReviewText(input);
+  };
+
+  const copyResult = async () => {
+    try {
+      await navigator.clipboard.writeText(reviewResult);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      /* clipboard unavailable — the user can select the text */
     }
   };
 
@@ -87,24 +110,52 @@ export const CleanupSettings: React.FC = () => {
             spellCheck={false}
             className="w-full px-3 py-2 text-sm bg-inset border border-hairline-strong rounded-lg focus:outline-none focus:ring-2 focus:ring-accent/35 resize-y"
           />
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2">
             <Button
               variant="primary"
+              size="md"
+              onClick={startReview}
+              disabled={input.trim().length === 0}
+            >
+              {t("settings.cleanup.review", "Review")}
+            </Button>
+            <Button
+              variant="secondary"
               size="md"
               onClick={runCleanup}
               disabled={busy || input.trim().length === 0}
             >
               {busy
-                ? t("settings.cleanup.cleaning", "Cleaning…")
-                : t("settings.cleanup.clean", "Clean up")}
+                ? t("settings.cleanup.cleaning", "Fixing…")
+                : t("settings.cleanup.clean", "Auto-fix")}
             </Button>
             <span className="text-xs text-faint">
               {t(
                 "settings.cleanup.tryHint",
-                "Runs the same pipeline as the hotkey.",
+                "Review = accept each fix; Auto-fix = clean it all.",
               )}
             </span>
           </div>
+
+          {reviewText !== null && (
+            <div className="space-y-3">
+              <ReviewPanel text={reviewText} onResult={setReviewResult} />
+              <div className="flex items-center gap-2">
+                <Button variant="primary" size="sm" onClick={copyResult}>
+                  {copied
+                    ? t("settings.cleanup.copied", "Copied ✓")
+                    : t("settings.cleanup.copyResult", "Copy result")}
+                </Button>
+                <span className="text-xs text-faint">
+                  {t(
+                    "settings.cleanup.reviewHint",
+                    "Click an underlined word, or use the cards below.",
+                  )}
+                </span>
+              </div>
+            </div>
+          )}
+
           {output !== null && (
             <div className="px-3 py-2 text-sm bg-panel border border-hairline rounded-lg whitespace-pre-wrap">
               {output || t("settings.cleanup.noOutput", "(no change)")}

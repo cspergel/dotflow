@@ -359,6 +359,9 @@ async previewCleanup(text: string) : Promise<Result<string, string>> {
     else return { status: "error", error: e  as any };
 }
 },
+async analyzeText(text: string) : Promise<TextSuggestion[]> {
+    return await TAURI_INVOKE("analyze_text", { text });
+},
 async postProcessIsConfigured() : Promise<boolean> {
     return await TAURI_INVOKE("post_process_is_configured");
 },
@@ -1037,6 +1040,7 @@ export type PermissionAccess = "allowed" | "denied" | "unknown"
  * spoken `aliases`, and the `expansion` text block it inserts.
  */
 export type PhraseRecord = { id: number; key: string; aliases: string[]; expansion: string }
+export type TextSuggestion = { start: number; end: number; kind: string; message: string; original: string; replacements: string[] }
 export type PostProcessProvider = { id: string; label: string; base_url: string; allow_base_url_edit?: boolean; models_endpoint?: string | null; supports_structured_output?: boolean }
 export type RecordingRetentionPeriod = "never" | "preserve_limit" | "days_3" | "weeks_2" | "months_3"
 export type SecretMap = Partial<{ [key in string]: string }>
