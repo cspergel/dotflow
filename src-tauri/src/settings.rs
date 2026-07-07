@@ -404,6 +404,11 @@ pub struct AppSettings {
     /// library that powers spoken triggers. Off by default; it monitors typing, so it is strictly opt-in.
     #[serde(default)]
     pub experimental_typed_expander: bool,
+    /// DotFlow: play a short confirmation "ding" when the typed expander replaces a trigger. Independent of
+    /// the dictation `audio_feedback` toggle; default ON (a subtle cue that an expansion fired). Only relevant
+    /// when `experimental_typed_expander` is on.
+    #[serde(default = "default_typed_expander_sound")]
+    pub typed_expander_sound: bool,
     #[serde(default)]
     pub clipboard_handling: ClipboardHandling,
     #[serde(default = "default_auto_submit")]
@@ -543,6 +548,10 @@ fn default_paste_delay_ms() -> u64 {
 
 fn default_auto_submit() -> bool {
     false
+}
+
+fn default_typed_expander_sound() -> bool {
+    true
 }
 
 fn default_history_limit() -> usize {
@@ -867,6 +876,7 @@ pub fn get_default_settings() -> AppSettings {
         field_stream_throttle_ms: default_field_stream_throttle_ms(),
         field_stream_char_delay_ms: default_field_stream_char_delay_ms(),
         experimental_typed_expander: false,
+        typed_expander_sound: true,
         clipboard_handling: ClipboardHandling::default(),
         auto_submit: default_auto_submit(),
         auto_submit_key: AutoSubmitKey::default(),

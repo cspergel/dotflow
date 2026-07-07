@@ -657,6 +657,7 @@ pub fn run(cli_args: CliArgs) {
             commands::phrases::update_phrase,
             commands::phrases::delete_phrase,
             commands::typed_expander::change_typed_expander_setting,
+            commands::typed_expander::change_typed_expander_sound_setting,
             helpers::clamshell::is_laptop,
         ])
         .events(collect_events![

@@ -27,3 +27,14 @@ pub fn change_typed_expander_setting(app: AppHandle, enabled: bool) -> Result<()
     }
     Ok(())
 }
+
+/// Toggle the confirmation "ding" played when the typed expander replaces a trigger. Persisted; read live at
+/// emit time, so no restart needed.
+#[tauri::command]
+#[specta::specta]
+pub fn change_typed_expander_sound_setting(app: AppHandle, enabled: bool) -> Result<(), String> {
+    let mut settings = get_settings(&app);
+    settings.typed_expander_sound = enabled;
+    write_settings(&app, settings);
+    Ok(())
+}

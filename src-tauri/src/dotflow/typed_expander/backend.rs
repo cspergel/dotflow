@@ -293,18 +293,24 @@ impl MonitorState {
     /// trailing settle covers the async `WM_INPUT` echoes that arrive just after the guard drops.
     fn emit(&mut self, n: usize, expansion: String) {
         self.suppress_until = Some(Instant::now() + Duration::from_millis(500));
+        let mut pasted = false;
         {
             let _guard = crate::clipboard::injection_guard();
             if let Err(e) = crate::clipboard::inject_field_edit(n, "", &self.app) {
                 log::warn!("typed-expander: failed to erase trigger: {e}");
             }
-            if let Err(e) = crate::clipboard::inject_bulk(&expansion, &self.app) {
-                log::warn!("typed-expander: failed to paste expansion: {e}");
+            match crate::clipboard::inject_bulk(&expansion, &self.app) {
+                Ok(()) => pasted = true,
+                Err(e) => log::warn!("typed-expander: failed to paste expansion: {e}"),
             }
         }
         self.buffer.consume(n);
         // Re-arm the settle from the moment the emit actually finished.
         self.suppress_until = Some(Instant::now() + Duration::from_millis(300));
+        // Confirmation ding (async, gated by its own setting) — only after a real paste.
+        if pasted {
+            crate::audio_feedback::play_expander_sound(&self.app);
+        }
     }
 }
 

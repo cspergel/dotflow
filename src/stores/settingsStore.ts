@@ -163,6 +163,8 @@ const settingUpdaters: {
     commands.changeExtraRecordingBufferSetting(value as number),
   experimental_typed_expander: (value) =>
     commands.changeTypedExpanderSetting(value as boolean),
+  typed_expander_sound: (value) =>
+    commands.changeTypedExpanderSoundSetting(value as boolean),
 };
 
 export const useSettingsStore = create<SettingsStore>()(
