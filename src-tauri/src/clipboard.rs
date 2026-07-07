@@ -5,7 +5,7 @@ use crate::settings::{get_settings, AutoSubmitKey, ClipboardHandling, PasteMetho
 use enigo::{Direction, Enigo, Key, Keyboard};
 use log::info;
 use std::process::Command;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 use tauri::{AppHandle, Manager};
 use tauri_plugin_clipboard_manager::ClipboardExt;
@@ -13,31 +13,43 @@ use tauri_plugin_clipboard_manager::ClipboardExt;
 #[cfg(target_os = "linux")]
 use crate::utils::{is_kde_wayland, is_wayland};
 
-/// DotFlow: raised WHILE DotFlow is injecting text (dictation streaming, the finalize paste, or the typed
-/// expander's own emit). The typed-expander keyboard monitor checks this and IGNORES all input while it is
-/// raised, so DotFlow's own synthetic keystrokes/paste can never re-trigger an expansion (no feedback loop).
-/// It is only ever READ by the (opt-in, default-off) typed expander, so raising it here is a no-op for the
-/// existing dictation path.
-static DOTFLOW_INJECTING: AtomicBool = AtomicBool::new(false);
+/// DotFlow: a re-entrant DEPTH counter, raised WHILE DotFlow is injecting text (dictation streaming, the
+/// finalize paste, or the typed expander's own emit). The typed-expander keyboard monitor checks this and
+/// IGNORES all input while it is > 0, so DotFlow's own synthetic keystrokes/paste can never re-trigger an
+/// expansion (no feedback loop). It is a COUNTER (not a bool) so guards can nest: the typed expander wraps
+/// its whole emit — erase-then-paste — in one outer guard while `inject_bulk` raises its own inner guard for
+/// the paste; the flag only clears when the OUTERMOST guard drops. It is only ever READ by the (opt-in,
+/// default-off) typed expander, so raising it here is a no-op for the existing dictation path.
+static DOTFLOW_INJECTING: AtomicUsize = AtomicUsize::new(0);
 
-/// True while DotFlow is mid-injection. Read by the typed-expander detector to suppress self-triggering.
+/// True while DotFlow is mid-injection (one or more guards held). Read by the typed-expander detector to
+/// suppress self-triggering.
 pub fn is_injecting() -> bool {
-    DOTFLOW_INJECTING.load(Ordering::SeqCst)
+    DOTFLOW_INJECTING.load(Ordering::SeqCst) > 0
 }
 
-/// RAII guard: raises the injecting flag for the duration of an injection and clears it on drop (even on
-/// early return / error). Create one at the top of every function that synthesizes input.
-struct InjectGuard;
+/// RAII guard: increments the injecting depth for the duration of an injection and decrements it on drop
+/// (even on early return / error). Create one at the top of every function that synthesizes input. Nesting
+/// is safe — the flag stays raised until every guard has dropped.
+pub struct InjectGuard;
 impl InjectGuard {
     fn new() -> Self {
-        DOTFLOW_INJECTING.store(true, Ordering::SeqCst);
+        DOTFLOW_INJECTING.fetch_add(1, Ordering::SeqCst);
         InjectGuard
     }
 }
 impl Drop for InjectGuard {
     fn drop(&mut self) {
-        DOTFLOW_INJECTING.store(false, Ordering::SeqCst);
+        DOTFLOW_INJECTING.fetch_sub(1, Ordering::SeqCst);
     }
+}
+
+/// DotFlow: raise the self-injection suppression flag for the caller's scope. Used by the typed-expander
+/// backend to wrap its multi-step emit (backspace the trigger, then paste the expansion) so the keyboard
+/// monitor ignores every synthetic keystroke the emit produces — including the ones `inject_field_edit` /
+/// `inject_bulk` generate under their own nested guards.
+pub fn injection_guard() -> InjectGuard {
+    InjectGuard::new()
 }
 
 /// Pastes text using the clipboard: saves current content, writes text, sends paste keystroke, restores clipboard.
@@ -812,5 +824,49 @@ mod tests {
         assert!(should_send_auto_submit(true, PasteMethod::Direct));
         assert!(should_send_auto_submit(true, PasteMethod::CtrlShiftV));
         assert!(should_send_auto_submit(true, PasteMethod::ShiftInsert));
+    }
+
+    // These guard tests share the process-global DOTFLOW_INJECTING counter, so they must not run
+    // concurrently with each other. cargo runs tests in a module on separate threads; serialize by holding a
+    // dedicated mutex for the duration of each. (The flag starts at 0 for a fresh process.)
+    static GUARD_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn injecting_flag_is_false_when_no_guard_is_held() {
+        let _lock = GUARD_TEST_LOCK.lock().unwrap();
+        assert!(!is_injecting(), "no guard held ⇒ not injecting");
+    }
+
+    #[test]
+    fn a_single_guard_raises_and_clears_the_flag() {
+        let _lock = GUARD_TEST_LOCK.lock().unwrap();
+        assert!(!is_injecting());
+        {
+            let _g = injection_guard();
+            assert!(is_injecting(), "flag is raised while the guard is held");
+        }
+        assert!(!is_injecting(), "flag clears when the guard drops");
+    }
+
+    #[test]
+    fn nested_guards_keep_the_flag_raised_until_the_outermost_drops() {
+        let _lock = GUARD_TEST_LOCK.lock().unwrap();
+        let outer = injection_guard();
+        assert!(is_injecting());
+        {
+            let _inner = injection_guard();
+            assert!(is_injecting(), "still injecting with two guards");
+        }
+        // The INNER guard dropped here — a bool flag would have cleared and let a synthetic keystroke leak
+        // through mid-emit. The counter must keep it raised because `outer` is still alive.
+        assert!(
+            is_injecting(),
+            "inner drop must NOT clear the flag while the outer guard is held"
+        );
+        drop(outer);
+        assert!(
+            !is_injecting(),
+            "flag clears only after the outermost guard drops"
+        );
     }
 }

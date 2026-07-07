@@ -161,6 +161,8 @@ const settingUpdaters: {
     commands.changeTranscribeGpuDevice(value as number),
   extra_recording_buffer_ms: (value) =>
     commands.changeExtraRecordingBufferSetting(value as number),
+  experimental_typed_expander: (value) =>
+    commands.changeTypedExpanderSetting(value as boolean),
 };
 
 export const useSettingsStore = create<SettingsStore>()(

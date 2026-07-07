@@ -187,6 +187,16 @@ fn initialize_core_logic(app_handle: &AppHandle) {
     app_handle.manage(history_manager.clone());
     app_handle.manage(phrase_manager.clone());
 
+    // DotFlow: the EXPERIMENTAL typed text expander (default OFF). Managed here so the settings toggle can
+    // start/stop it live; if the setting is already on from a previous session, start the keyboard monitor
+    // now. It emits through the same injection primitives as dictation, so it self-suppresses via the
+    // injection guard.
+    let typed_expander = Arc::new(dotflow::typed_expander::ExpanderController::new());
+    app_handle.manage(typed_expander.clone());
+    if settings::get_settings(app_handle).experimental_typed_expander {
+        typed_expander.start(app_handle.clone());
+    }
+
     // Note: Shortcuts are NOT initialized here.
     // The frontend is responsible for calling the `initialize_shortcuts` command
     // after permissions are confirmed (on macOS) or after onboarding completes.
@@ -646,6 +656,7 @@ pub fn run(cli_args: CliArgs) {
             commands::phrases::add_phrase,
             commands::phrases::update_phrase,
             commands::phrases::delete_phrase,
+            commands::typed_expander::change_typed_expander_setting,
             helpers::clamshell::is_laptop,
         ])
         .events(collect_events![

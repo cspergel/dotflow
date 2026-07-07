@@ -24,6 +24,7 @@ import { LazyStreamClose } from "../LazyStreamClose";
 import { FieldStreaming } from "../FieldStreaming";
 import { FieldStreamThrottle } from "../FieldStreamThrottle";
 import { FieldStreamCharDelay } from "../FieldStreamCharDelay";
+import { TypedExpander } from "../TypedExpander";
 
 export const AdvancedSettings: React.FC = () => {
   const { t } = useTranslation();
@@ -74,6 +75,7 @@ export const AdvancedSettings: React.FC = () => {
           <FieldStreaming descriptionMode="tooltip" grouped={true} />
           <FieldStreamThrottle descriptionMode="tooltip" grouped={true} />
           <FieldStreamCharDelay descriptionMode="tooltip" grouped={true} />
+          <TypedExpander descriptionMode="tooltip" grouped={true} />
         </SettingsGroup>
       )}
     </div>
