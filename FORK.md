@@ -6,6 +6,9 @@ the DotFlow product: live in-field injection, dot-phrase / voice-alias macros, a
 and a Dragon-style UI. Handy's MIT `LICENSE` (© CJ Pais) is retained.
 
 - **Forked from:** Handy commit `dad37baa0315c63c3a3d91af1fdcd6ad6e401f4f`.
+- **Last synced with upstream:** `0a59e1f` (2026-07-07) — ported `0a59e1f` (ampersands in custom words)
+  and `cdb4633` (overlay during post-processing); skipped `45e3eed` (Italian translations, we've rebranded).
+  Next weekly check: `git fetch upstream && git log --oneline 0a59e1f..upstream/main`.
 - **Upstream remote:** `upstream` → `https://github.com/cjpais/Handy.git` (our `origin` is this repo).
 - Our git history was flattened at fork time, so `git merge upstream/main` is **not** a clean operation.
   We pull upstream improvements by **cherry-pick / hand-port**, which works across unrelated histories.
