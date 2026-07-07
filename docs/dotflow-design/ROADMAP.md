@@ -13,8 +13,11 @@ powers spoken triggers). Step 1 (safe foundation, off by default) is **done** (`
 
 - [x] Step 1 — setting `experimental_typed_expander` (default OFF), self-injection suppression
       (`is_injecting()` / `InjectGuard`), pure tested core (`ExpanderBuffer`, `match_typed_trigger`).
-- [x] Step 2/3 — Windows Raw Input keyboard monitor **implemented** (`dotflow/typed_expander/backend.rs`),
-      builds + unit-tests green; **live smoke-test pending** (type `.fu` in another app):
+- [x] Step 2/3 — Windows Raw Input keyboard monitor **implemented + live-validated**
+      (`dotflow/typed_expander/backend.rs`). Smoke-tested by driving synthetic keystrokes into a separate
+      window: typing `.fix` erased the trigger and pasted "Fix the bug where " (clipboard preserved), and a
+      lone sentence period was left literal. Caught + fixed a real bug along the way (empty-key phrases made a
+      bare `.` trigger — see below).
   - `RegisterRawInputDevices` (keyboard, `RIDEV_INPUTSINK`) + message-only hidden window + `WM_INPUT`
     pumped on a **dedicated native thread**; chars decoded with `ToUnicodeEx` + a tracked 256-key state.
   - Feed printable chars → `push`; Backspace → `backspace`; Enter/Tab/Esc/arrows/nav/Delete → `reset`;
@@ -26,6 +29,9 @@ powers spoken triggers). Step 1 (safe foundation, off by default) is **done** (`
   - Start/stop the monitor thread on the setting toggle (`change_typed_expander_setting` command) and at
     boot when already on; UI toggle in Advanced → Experimental with an explicit "monitors your typing" note.
   - Windows-only; a `#[cfg]` stub keeps other platforms compiling (mac/Linux backends can slot in later).
+  - **Bug fixed (found via smoke-test):** alias-only phrases are stored with `key = ""`, so `match_typed_trigger`
+    built the trigger `".{key}" == "."` and expanded on **every lone period**. `PhraseTable::new` now drops
+    empty keys (with a defensive guard in `match_typed_trigger`), fixing both the typed and spoken paths.
   - **Deviations from the original spec:** backspaces go through the tested `inject_field_edit` (enigo)
     rather than raw `SendInput`; self-suppression uses the guard + a time-based settle rather than HID-source
     filtering. **Known v1 limitation:** a trigger fires the instant it completes (`.fu` expands mid-word in

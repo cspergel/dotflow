@@ -35,7 +35,13 @@ impl PhraseTable {
     pub fn new(phrases: &[Phrase]) -> Self {
         let mut t = PhraseTable::default();
         for p in phrases {
-            t.by_key.insert(norm(&p.key), p.expansion.clone());
+            // Skip empty dot-keys: alias-only phrases are stored with key = "", and registering "" would
+            // make the trigger ".{key}" == "." — matching every lone period the user types or says. Their
+            // spoken aliases below still register.
+            let key = norm(&p.key);
+            if !key.is_empty() {
+                t.by_key.insert(key, p.expansion.clone());
+            }
             for a in &p.aliases {
                 let words = canonical_words(a);
                 if !words.is_empty() {
@@ -65,6 +71,11 @@ impl PhraseTable {
         let lower = text.to_lowercase();
         let mut best: Option<(usize, String)> = None;
         for (key, exp) in &self.by_key {
+            // Defense in depth: an empty key would make the trigger a bare "." (see `new`, which already
+            // drops empty keys) — never let a lone period expand.
+            if key.is_empty() {
+                continue;
+            }
             let trigger = format!(".{key}");
             if lower.ends_with(&trigger) {
                 let n = trigger.chars().count();
@@ -294,6 +305,24 @@ mod tests {
             expand("state-of-the-art care", &table()),
             "state-of-the-art care"
         );
+    }
+
+    #[test]
+    fn an_empty_key_phrase_never_creates_a_dot_trigger() {
+        // Alias-only phrases (a spoken trigger, no dot key) are stored with key = "" in the library. Such a
+        // phrase must NOT register a "." trigger — otherwise the typed expander fires it on EVERY lone period
+        // the user types (and `expand` would swallow every sentence-ending "."). Found via live smoke-test.
+        let t = PhraseTable::new(&[Phrase {
+            key: "".into(),
+            aliases: vec!["insert note".into()],
+            expansion: "A long note.".into(),
+        }]);
+        // Typed expander: a bare "." — or any text ending in "." — must not match the empty key.
+        assert_eq!(t.match_typed_trigger("."), None);
+        assert_eq!(t.match_typed_trigger("end of sentence."), None);
+        // The spoken alias still expands, and an ordinary sentence-ending period is left untouched.
+        assert_eq!(expand("insert note", &t), "A long note.");
+        assert_eq!(expand("all done.", &t), "all done.");
     }
 
     #[test]
