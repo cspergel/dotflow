@@ -6,6 +6,8 @@ import { Button } from "../../ui/Button";
 import { Input } from "../../ui/Input";
 import { Textarea } from "../../ui/Textarea";
 import { SettingsGroup } from "../../ui/SettingsGroup";
+import { TypedExpander } from "../TypedExpander";
+import { TypedExpanderSound } from "../TypedExpanderSound";
 
 // DotFlow — the editable phrase library (design §8). Beeftext-simple: a trigger → text-block list, but the
 // trigger fires as you SPEAK during dictation (say the spoken trigger, or type the dot trigger). Every edit
@@ -161,6 +163,11 @@ export const PhrasesSettings: React.FC = () => {
 
   return (
     <div className="max-w-3xl w-full mx-auto space-y-6">
+      <SettingsGroup title="Typed expansion">
+        <TypedExpander descriptionMode="tooltip" grouped={true} />
+        <TypedExpanderSound descriptionMode="tooltip" grouped={true} />
+      </SettingsGroup>
+
       <SettingsGroup title="Phrase library">
         <div className="flex flex-col gap-3 p-1">
           <p className="text-sm opacity-70">

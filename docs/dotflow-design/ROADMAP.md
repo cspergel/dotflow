@@ -71,6 +71,28 @@ powers spoken triggers). Step 1 (safe foundation, off by default) is **done** (`
       firing on every keypress). Escape + F-keys stay exempt. 5 unit tests. (`shortcut/tauri_impl.rs`)
 - Live-validated: `hello  world ,its  me` → `Hello world, its me`.
 
+### 5. Offline grammar cleanup + Grammarly-style review (IN PROGRESS)
+
+Free, fully-offline grammar/spelling via **Harper** (`harper-core`, Apache-2.0) — no API key. The engine is
+in and wired to the Ctrl+Shift+U hotkey (see commit `e7f8a75`).
+
+- [x] Harper engine (`dotflow/grammar.rs`): `harper_cleanup` (auto-apply confident fixes) + `analyze`
+      (return spans/kind/message/replacements for a review UI). Panic-safe. Cleanup tier order:
+      post-process LLM → Harper → deterministic tidy. Unit-tested.
+- [x] **Cleanup** settings section (hotkey, engine indicator, "Try it" box via `preview_cleanup`).
+- [x] Hotkey reliability: wait for modifier release before the synthetic Ctrl+C, sentinel-based copy detect.
+- [x] Moved the typed-expander + ding toggles out of Advanced→Experimental into the **Phrases** section.
+- [ ] **Review panel** (NEXT): a Grammarly-style UI in DotFlow's own window — text with issues underlined,
+      click-to-accept/reject each suggestion, then insert/paste. Data layer done (`analyze_text` command +
+      `TextSuggestion`); build the panel UI (render text + highlight `start..end` spans + replacement
+      chips + apply by char-splice). Feed it from: (a) **post-dictation** review, and (b) a **selection**
+      hotkey (selected text or whole field).
+- [ ] **Live trailing autofix** (later, experimental): correct completed words/sentences as you type in any
+      app, reusing the typed-expander's Raw Input monitor + focus-change stop. No highlighting.
+- [ ] **Dictionaries**: Medical/Legal wordlist toggles on top of Harper (`hunspell-en-med-glut`, OpenMedSpel).
+- [ ] _Deferred:_ in-app highlighting _inside other apps_ (Gmail/Outlook) — needs per-app accessibility /
+      overlay integration (the hard Grammarly path). Revisit only if we commit to it.
+
 ## Later / backlog
 
 - Phone-as-microphone (LAN web page, QR pair, WebSocket audio → transcribe pipeline). Likely last.

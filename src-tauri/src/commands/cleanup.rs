@@ -17,6 +17,14 @@ pub async fn preview_cleanup(app: AppHandle, text: String) -> Result<String, Str
     Ok(out)
 }
 
+/// Analyze `text` and return Harper's reviewable suggestions (spans + replacements) WITHOUT changing it —
+/// the data source for the Grammarly-style review panel, where the user accepts/rejects each fix. Offline.
+#[tauri::command]
+#[specta::specta]
+pub fn analyze_text(text: String) -> Vec<crate::dotflow::grammar::TextSuggestion> {
+    crate::dotflow::grammar::analyze(&text)
+}
+
 /// Whether a post-process LLM is fully configured (provider + model + prompt). The Cleanup section uses this
 /// to show whether the hotkey is using the AI tier or the offline Harper tier.
 #[tauri::command]
