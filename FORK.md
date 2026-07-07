@@ -13,6 +13,21 @@ and a Dragon-style UI. Handy's MIT `LICENSE` (© CJ Pais) is retained.
 - Our git history was flattened at fork time, so `git merge upstream/main` is **not** a clean operation.
   We pull upstream improvements by **cherry-pick / hand-port**, which works across unrelated histories.
 
+## CI on the fork
+
+Handy ships heavy CI (signed builds, nix, playwright) that needs Handy's secrets or burns 30+ min per push.
+On the fork we keep only the two fast, green workflows and **disable the rest via the GitHub API** (not by
+editing the YAML — that would conflict on every upstream sync). Disabling this way leaves no trace in the
+repo, hence this note.
+
+- **Active:** `code quality` (~20s), `test` (~2min).
+- **Disabled** (`gh workflow disable`, 2026-07-07): `main-build.yml` (fails — needs signing secrets),
+  `nix-check.yml` (passes but ~36 min/push), `playwright.yml`, `build.yml`, `build-test.yml`,
+  `pr-test-build.yml`, `release.yml`.
+- **Check / re-enable:** `gh workflow list --all --repo cspergel/dotflow` · `gh workflow enable <file>.yml`.
+- After an upstream sync **re-check this** — a synced change can re-add a workflow file or a new trigger; a
+  freshly-added workflow starts **active** and must be disabled again if unwanted.
+
 ## Pulling an upstream change
 
 ```sh
@@ -33,12 +48,13 @@ merging upstream, expect conflicts only here:
 
 **Rust (`src-tauri/src/`)**
 
-- `clipboard.rs` — char-by-char keystroke injection + settle (the Windows key-repeat fix); `inject_field_edit`; `paste()` runs the phrase wedge + reads the user's table.
+- `clipboard.rs` — char-by-char keystroke injection + settle (the Windows key-repeat fix); `inject_field_edit`; the **re-entrant** self-injection guard (`is_injecting`/`injection_guard`, an `AtomicUsize` counter) the typed expander reads; `paste()` runs the phrase wedge + reads the user's table.
 - `managers/transcription.rs` — the streaming field-injection hook (`emit_stream_text`, `finalize_field_stream`, `FieldStreamer`, throttle/char-delay), reads the phrase table.
 - `actions.rs` — emits `dictation-state` on record start/stop; the field-streaming stop path.
-- `settings.rs` — added `experimental_field_streaming`, `field_stream_throttle_ms`, `field_stream_char_delay_ms`; `PasteMethod::Direct` default; default model = Parakeet.
-- `lib.rs` — registers `PhraseManager` + phrase commands; frameless + smaller min window size; title "DotFlow".
-- `managers/mod.rs`, `commands/mod.rs` — module registration for the new `phrases` modules.
+- `audio_feedback.rs` — added `SoundType::Expand` + `play_expander_sound` (the typed-expander ding).
+- `settings.rs` — added `experimental_field_streaming`, `field_stream_throttle_ms`, `field_stream_char_delay_ms`, `experimental_typed_expander`, `typed_expander_sound`; `PasteMethod::Direct` default; default model = Parakeet.
+- `lib.rs` — registers `PhraseManager` + phrase commands + the typed-expander controller/commands (boot-starts the monitor if enabled); frameless + smaller min window size; title "DotFlow".
+- `managers/mod.rs`, `commands/mod.rs` — module registration for the new `phrases` + `typed_expander` modules.
 
 **Config / build**
 
@@ -61,12 +77,15 @@ merging upstream, expect conflicts only here:
 
 ## DotFlow-only files (never conflict — safe to keep as-is on merge)
 
-- `src-tauri/src/dotflow/` — `mod.rs`, `phrases.rs`, `punctuation.rs`, `field_stream.rs` (pure, unit-tested).
+- `src-tauri/src/dotflow/` — `mod.rs`, `phrases.rs`, `punctuation.rs`, `field_stream.rs` (pure, unit-tested),
+  and `typed_expander/` (`mod.rs` pure core + `backend.rs` Windows Raw Input keyboard monitor).
 - `src-tauri/src/managers/phrases.rs` — SQLite `PhraseManager` (phrase library).
-- `src-tauri/src/commands/phrases.rs` — phrase CRUD commands.
+- `src-tauri/src/commands/phrases.rs` — phrase CRUD commands. `src-tauri/src/commands/typed_expander.rs` — the expander toggle + ding-toggle commands.
+- `src-tauri/resources/expand.wav` — the typed-expander confirmation ding.
 - `src/components/` — `DragonBar.tsx`, `TitleBar.tsx`, `settings/phrases/PhrasesSettings.tsx`,
-  `settings/FieldStreaming.tsx`, `settings/FieldStreamThrottle.tsx`, `settings/FieldStreamCharDelay.tsx`.
-- `docs/dotflow-design/` — the product design docs.
+  `settings/FieldStreaming.tsx`, `settings/FieldStreamThrottle.tsx`, `settings/FieldStreamCharDelay.tsx`,
+  `settings/TypedExpander.tsx`, `settings/TypedExpanderSound.tsx`.
+- `docs/dotflow-design/` — the product design docs (incl. `ROADMAP.md`, `SESSION-HANDOFF.md`).
 - `icon-source.png` — the brand source (regenerate app icons with `bunx @tauri-apps/cli icon icon-source.png`).
 
 ## Keeping merges cheap

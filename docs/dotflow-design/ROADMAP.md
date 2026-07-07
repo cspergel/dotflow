@@ -37,12 +37,13 @@ powers spoken triggers). Step 1 (safe foundation, off by default) is **done** (`
     filtering. **Known v1 limitation:** a trigger fires the instant it completes (`.fu` expands mid-word in
     `.fund`) — pick trigger keys that aren't word prefixes.
 
-### 2. Housekeeping
+### 2. Housekeeping ✅
 
-- [ ] Disable the noisy Handy CI workflows (`build`, `main-build`, `release`, `nix-check`, `playwright`,
-      `build-test`, `pr-test-build`); keep `code-quality` + `test`.
-- [ ] Weekly upstream sync: `git fetch upstream && git log --oneline 0a59e1f..upstream/main`, cherry-pick
-      worthwhile fixes, rebuild+test, update `FORK.md`. Last synced: `0a59e1f`.
+- [x] Disabled the noisy Handy CI workflows via `gh workflow disable` (not YAML edits, to avoid upstream-sync
+      conflicts): `main-build`, `nix-check`, `playwright`, `build`, `build-test`, `pr-test-build`, `release`.
+      Kept `code-quality` + `test`. Documented in `FORK.md` (§CI on the fork) with the re-enable command.
+- [x] Upstream sync check (2026-07-07): `upstream/main` head is `0a59e1f` — the last sync point, so **no new
+      commits to port**. Re-run `git fetch upstream && git log --oneline 0a59e1f..upstream/main` next week.
 
 ### 3. Premium redesign (expanded window)
 
