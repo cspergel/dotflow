@@ -1,103 +1,134 @@
-# DotFlow — session handoff (resume here after compaction)
+# DotFlow — session handoff (resume here in a fresh session)
 
 ## What DotFlow is
 
-A fork of **Handy** (`cjpais/Handy`, MIT, Tauri 2 + Rust + React) rebranded to DotFlow. It transcribes speech
-with local Parakeet (ONNX/CPU via `transcribe-rs`). The DotFlow product layer = phrase expansion + punctuation +
-live field injection on top of Handy's engine (design: `docs/dotflow-design/DotFlow-plan-v2.md` +
-`DotFlow-asr-stack-research.md`).
+A fork of **Handy** (`cjpais/Handy`, MIT; Tauri 2 + Rust + React) rebranded to **DotFlow**. Local‑first
+dictation app whose differentiators are: **live in‑field text injection as you speak** (Dragon feel),
+**dot‑phrase / voice‑alias macros**, an **editable phrase library**, and a **Dragon‑style compact UI**.
 
-## Environment / how to build + run
+- **Repo:** `github.com/cspergel/dotflow` (`origin`). `upstream` = `github.com/cjpais/Handy`.
+- **Local path:** `~/Documents/Coding Projects/dotflow`.
+- **Product design:** `docs/dotflow-design/DotFlow-plan-v2.md` + `DotFlow-asr-stack-research.md`.
+- **Fork maintenance:** `FORK.md` (upstream‑sync recipe + the exact list of Handy files we modified).
 
-- Repo: `~/Documents/Coding Projects/dotflow` (a fresh Handy clone + our changes; **NOT its own git repo yet, uncommitted**).
-- Toolchain: cargo 1.96 (msvc), node 22, bun 1.3, pnpm. VS 2022 C++ + Win SDK present. **No Vulkan SDK** →
-  we dropped whisper's `vulkan` feature in `src-tauri/Cargo.toml` (we use Parakeet ONNX/CPU, not whisper-GPU).
-- Build backend: `cd src-tauri && export PATH="$HOME/.cargo/bin:$PATH" && export CARGO_TARGET_DIR="C:/dtfb" && cargo build` (short target dir dodges the Windows 260-char path limit).
-- Run the app: `cd dotflow && export CARGO_TARGET_DIR="C:/dtfb" && bun run tauri dev` (opens the window; long-running).
-- Data dir: `%APPDATA%/com.dotflow.app/` (has the Parakeet model + `settings_store.json`). We copied the model +
-  settings there from `com.pais.handy` when we changed the identifier.
-- Toggle experimental flags by editing `settings_store.json` → `settings.experimental_*` (no UI toggle).
+## Environment / build / run
 
-## Rebrand (DONE, keep)
+- Toolchain: cargo (MSVC on Windows), bun, node. **No Vulkan SDK** → whisper `vulkan` feature dropped in
+  `src-tauri/Cargo.toml` (we use Parakeet ONNX/CPU).
+- **Build:** `cd src-tauri && export CARGO_TARGET_DIR="C:/dtfb" && cargo build` (short target dir dodges the
+  Windows 260‑char path limit).
+- **Run (dev):** `cd dotflow && export CARGO_TARGET_DIR="C:/dtfb" && bun run tauri dev` — the watcher
+  auto‑rebuilds Rust on save and HMRs the frontend. A **frameless** window / **icon** change needs a full
+  app restart (and icon needs `touch src-tauri/build.rs` to re‑embed).
+- **Tests:** `cd src-tauri && cargo test --lib dotflow` (the pure cores are unit‑tested).
+- **Frontend typecheck:** `node_modules/.bin/tsc --noEmit -p tsconfig.json`.
+- **Data dir:** `%APPDATA%/com.dotflow.app/` — `phrases.db`, `settings_store.json`, the Parakeet model.
+- **CI:** `code-quality` + `test` PASS. The heavy Handy workflows (`build`, `main-build`, `release`,
+  `nix-check`, `playwright`, `build-test`, `pr-test-build`) **fail on the fork** (need Handy's secrets/signing)
+  — recommended to disable them; **not done yet** (open task).
 
-`src-tauri/Cargo.toml` package `name = "dotflow"` + `default-run = "dotflow"`; `tauri.conf.json`
-`productName: DotFlow`, `identifier: com.dotflow.app`; `package.json` name `dotflow`. Lib stays `handy_app_lib`.
-→ distinct `dotflow.exe`, runs alongside Handy.
+## What WORKS today (validated live)
 
-## Current state (updated 2026-07-06 — Steps 1 & 2 DONE, code-complete + green)
+- **Live field streaming** (Dragon feel): a streaming model's committed text is keystroke‑injected as you
+  speak. Char‑by‑char with a **tunable per‑char delay** (`field_stream_char_delay_ms`, default 8) + a
+  **throttle** (`field_stream_throttle_ms`, default 100) — this beats the Windows enigo key‑repeat race.
+  Whole‑word hold + command‑buffer. Gated by `experimental_field_streaming` (needs a streaming model, e.g.
+  Parakeet Unified). Sliders in Advanced → Experimental.
+- **Dot‑phrase / voice‑alias macros:** spoken triggers (`insert follow up`) or dot keys (`.fu`) expand to a
+  saved block. Matching is **case‑, punctuation‑, and hyphen‑insensitive** (Parakeet writes "follow‑up").
+- **Instant macro insert:** the finalize path pastes the resolved block via **clipboard (`inject_bulk`)** so a
+  macro drops in at once on release (streaming mid‑utterance still types word‑by‑word — accepted).
+- **Editable phrase library:** SQLite `PhraseManager` + CRUD commands + a **Phrases** settings page; edits
+  apply on the next dictation.
+- **Dragon‑style UI:** frameless window; custom **titlebar** (drag / minimize / close‑to‑tray); a compact
+  **always‑on‑top bar** (mic **amber on standby → green while dictating**, "Ready to dictate", hotkey on
+  hover, drag anywhere) that **expands** to the full app. Emerald theme, DotFlow wordmark + dot‑flow mark,
+  green app icons.
 
-- **Batch dictation works** (Handy's proven path): Parakeet transcribes, overlay shows text, final text injects.
-- **STEP 1 (cleanup) DONE.** Deleted `clause.rs` + `clause_worker.rs`; removed the `experimental_clause_injection`
-  flag and all its wiring (audio.rs `clause_router`/`create_audio_recorder` param/audio-callback feed/
-  `start_clause_session`/`finish_clause_session`; actions.rs record-start call + stop-path batch-skip branch).
-  `cargo build` + `cargo test --lib dotflow` green (25 tests). No refs to any removed symbol remain.
-- **STEP 2 (word-batched field-streaming) DONE (code) — needs a LIVE test.** `field_stream.rs` reworked:
-  `advance(committed)` now HOLDS the trailing partial word and only releases text up to the last whitespace
-  boundary (whole completed words), in far fewer/larger enigo bursts — the fix for the keystroke-race. Added
-  `flush(committed)` to release the held word at stop; `finalize_field_stream` now calls `flush`. Removed the
-  temporary `info!` diagnostic and the unused `reset_field_stream` wrapper (`start_stream` already resets
-  inline at line ~781). 7 pure unit tests green (`cargo test --lib dotflow::field_stream`).
-- **`experimental_field_streaming` is OFF** in the store — the app is in the clean, known-good batch state.
-- **DotFlow product code** in `src-tauri/src/dotflow/`:
-  - `phrases.rs`, `punctuation.rs`, `mod.rs` (`process_clause` + `starter_pack`) — **tested, KEEP.** The wedge
-    (`.fix`/"insert follow up" → template; spoken punctuation). Wired into `clipboard.rs::paste` (batch path).
-    0-survivor mutation-verified earlier. (Not yet in the STREAMING path — that's Step 3.)
-  - Injection-first: `PasteMethod::default()` → `Direct` (enigo.text keystroke injection). **KEEP.**
-  - `field_stream.rs` + the `emit_stream_text` hook (transcription.rs) — word-batched streaming into the field.
-    **Reworked in Step 2; awaiting a live test with a streaming model.**
+## Hard‑won gotchas (do NOT re‑derive)
 
-## HOW TO LIVE-TEST Step 2 (do this next)
+- `enigo.text()` **races on this Windows machine** (dropped/repeated keys, "ggggg") — the race is INSIDE a
+  single multi‑char call, so throttling whole calls can't fix it. **Fix = type char‑by‑char with a per‑char
+  delay** (`inject_field_edit` in `clipboard.rs`).
+- **Parakeet hyphenates** "follow up" → "follow‑up" → matching uses `canonical_words` (split on hyphens) in
+  `dotflow/phrases.rs`.
+- **Tauri v2 gates window ops** (`setSize`, `startDragging`, …) behind **capabilities** → see
+  `src-tauri/capabilities/default.json`. Missing perms fail silently.
+- **Frameless** = `decorations(false)` in `lib.rs` + custom chrome; the app **icon** is embedded at build via
+  `build.rs`, so changing `icons/` needs `touch src-tauri/build.rs` to force a re‑embed, then a full restart.
+- **CI:** `format:check` runs `prettier --check .` (WHOLE repo incl. `.md`) **&&** `cargo fmt -- --check`; the
+  translation check requires **every locale** to have every key (add new keys to all 20 non‑EN locales).
+  `code-quality` only triggers on `src/**` changes — dispatch it manually if you only changed Rust/docs.
 
-1. Launch DotFlow: `cd dotflow && export CARGO_TARGET_DIR="C:/dtfb" && bun run tauri dev`.
-2. Download a **streaming** model via the Models page — **Parakeet Unified** (the default `parakeet-tdt-0.6b-v3`
-   is batch; field-streaming needs a model that emits committed/tentative). Select it.
-3. In `%APPDATA%/com.dotflow.app/settings_store.json` set `settings.experimental_field_streaming: true`.
-4. Focus **Notepad**, dictate a few sentences. Expect whole words to appear in the field a word behind your
-   speech, cleanly — no `ssss rrrr` churn. The overlay still shows the live tentative guess.
+## This session's work (all on `origin/main`)
 
-- **If the race STILL appears** under rapid end-of-sentence commit bursts: the next lever is a small
-  inter-write throttle (sleep ~10ms after each streaming enigo write, on the streaming worker thread in
-  `emit_stream_text`) — NOT yet added, to keep the fix clean/tested first. That's the one-line fallback.
+Phrase pipeline (injection race fix → hyphen matching → editable library) · full rebrand (emerald theme,
+wordmark/mark, green icons, "Handy"→"DotFlow", title) · Dragon‑style shell (frameless + custom titlebar +
+compact bar + window resize + `dictation-state` color signal) · instant macro insert (`inject_bulk`) ·
+DotFlow README + `FORK.md` · CI fixes (translations/eslint/prettier/cargo fmt green) · ported 2 upstream Handy
+fixes (`0a59e1f` ampersands, `cdb4633` overlay) · **typed‑expander step 1**.
 
-## Why the live-injection experiments failed (the lesson)
+## IN PROGRESS — Typed text expander (Beeftext/Espanso‑style)
 
-Both injected too aggressively: the clause worker mis-segmented (dots), and `field_stream` fires `enigo` on
-_every_ streaming update (many/sec) → rapid programmatic keystrokes lose a race with Windows input timing →
-dropped/repeated keys (`ssss rrrr`). **The overlay is reliable because it just renders; hammering the keyboard
-API is not.** The streaming DATA is perfect (overlay proves it) — the problem is the write mechanism.
+Goal: type a dot‑trigger (`.fu`) in **any** app and it's replaced by your saved text — the **same phrase
+library** that powers spoken triggers. **Architecture decision (from research):** build a global‑input
+expander **modeled on Espanso** (Espanso is Rust but **GPL‑3.0 → study/mirror, do NOT link its crates**;
+Beeftext is **MIT**). Reject the IME approach for v1 (Windows TSF is heavy + forces input‑source switching).
 
-## THE PLAN — start here (in order)
+**Step 1 — DONE (commit `8c4eb61`), off by default, dictation untouched:**
 
-### Step 1 — CLEAN UP (remove the broken experiments)
+- Setting `experimental_typed_expander` (default OFF).
+- **Self‑injection suppression flag** in `clipboard.rs`: `is_injecting()` + an `InjectGuard` raised around
+  every injection (`inject_field_edit`, `inject_bulk`, `inject_text_raw`, `paste`). The future keyboard
+  monitor checks this and drops all input while raised → DotFlow can never re‑trigger itself. No‑op today.
+- **Pure, tested core:** `dotflow::typed_expander::ExpanderBuffer` (rolling buffer + push/backspace/reset/
+  consume) and `PhraseTable::match_typed_trigger` (dot‑trigger suffix match, case‑insensitive, longest‑key‑
+  wins). 8 unit tests.
 
-- Delete `src-tauri/src/dotflow/clause.rs` and `clause_worker.rs`; drop their `mod`/`pub use` in
-  `dotflow/mod.rs` (`clause`, `clause_worker`, `ClauseInjectionLoop`, `ClauseSegmenter`, `ClauseStream`, `ClauseRouter`).
-- Remove `experimental_clause_injection` (settings field + the `get_default_settings` literal) and its wiring:
-  `managers/audio.rs` (`clause_router` field + init + the `create_audio_recorder` param + the `.feed` in the
-  audio callback + `start_clause_session`/`finish_clause_session`), and `actions.rs` (`rm.start_clause_session()`
-  at record start + the `else if experimental_clause_injection { … }` batch-skip branch).
-- KEEP `field_stream.rs`, the `experimental_field_streaming` flag, and the `emit_stream_text` hook — but rework
-  the mechanism in Step 2.
-- Verify: `cargo build` + `cargo test --lib dotflow` green; flags off ⇒ batch dictation still works.
+**NEXT — Step 2/3: the Windows Raw Input backend (the actual keyboard monitor).** Build spec (from research,
+so you don't have to re‑research):
 
-### Step 2 — rebuild field-streaming (word-batched, the user's model)
+- **Detect via Raw Input, NOT `WH_KEYBOARD_LL`** (a slow LL hook lags the whole system + Windows can drop it).
+  Use the `windows` crate: `RegisterRawInputDevices` (keyboard, `RIDEV_INPUTSINK`) + a **message‑only hidden
+  window** + `WM_INPUT` pumped with `GetMessage` on a **dedicated native thread** (not the Tauri thread).
+  Decode characters with `ToUnicodeEx` (full keyboard state) — Raw Input gives keys, you reconstruct chars.
+- **Feed** printable chars → `ExpanderBuffer::push`; Backspace → `backspace`; Enter/Tab/Esc + arrow/nav keys +
+  mouse click + **window‑focus change** (`SetWinEventHook EVENT_SYSTEM_FOREGROUND`) → `reset`.
+- **On `matched()`:** if `!clipboard::is_injecting()`, raise the guard, **`SendInput` N× `VK_BACK`** to erase
+  the `.key`, then paste the expansion via **`inject_bulk`** (instant, reuses what's built), then
+  `buffer.consume(N)`. Keep the buffer's suppression tight (a small trailing settle after emit so async
+  `WM_INPUT` for our own keys doesn't leak — or filter by HID source like Espanso).
+- **Wire‑up:** start the monitor thread only when `experimental_typed_expander` is on (start on setting‑on,
+  stop on setting‑off); a UI toggle in Advanced → Experimental with an explicit "monitors your typing" note.
+- **Keep it isolated** in `dotflow/typed_expander/` behind a trait so mac/Linux backends can follow later.
 
-The overlay already computes the correct accumulated committed text. Mirror **only completed words** to the field:
-inject once per finished word (committed grew past the last word boundary), append-only, debounced — _one_
-enigo write per word, not per chunk. Far fewer/larger writes ⇒ no keystroke-race churn. Keep `FieldStreamer`
-(already append-only + tested) but only call it when a new **complete word** is available. Test into Notepad with
-a **streaming model** (Parakeet Unified — needs downloading via the Models page). Remove the temporary `info!`
-diagnostic in `emit_stream_text` once fixed.
+## Roadmap / backlog (agreed)
 
-### Step 3 — the specialized functions (on stable text)
+1. **Typed expander backend** (next — spec above).
+2. **Premium redesign** of the full/expanded window — the Linear/Raycast look: surface‑ladder colors + 1px
+   hairline borders + **no drop shadows** + **medium‑weight (500) headings, tight tracking** + constrained
+   content width (~640–720px) + settings as **grouped hairline‑separated rows** (not card‑per‑setting). (Full
+   research spec was captured in‑session; re‑fetch if needed.)
+3. **"Clean up selected text" hotkey** — a 2nd hotkey that sends the SELECTED text (typed or not) to the
+   **post‑process LLM** (Ctrl+C → read clipboard → LLM cleanup prompt → paste result). Reuses existing
+   post‑processing infra + clipboard. (Note: the ASR model doesn't clean text; the post‑process LLM does.)
+4. **Phone‑as‑microphone** (likely last) — a local server in DotFlow serves a web page; the phone opens it on
+   the LAN (QR pair), grants mic, **streams audio over WebSocket** to the desktop → existing transcribe
+   pipeline. Browser‑based, no app‑store app.
+5. **Weekly upstream sync** — `git fetch upstream && git log --oneline <last>..upstream/main`, cherry‑pick
+   worthwhile fixes, rebuild+test. **Last synced: `0a59e1f`** (see `FORK.md`).
+6. **Disable the noisy Handy CI workflows** (keep `code-quality` + `test`).
 
-Layer on the now-stable field text: (a) phrase expansion + punctuation in the streaming path (not just batch);
-(b) "fix / clean up last dictation in place" (deterministic, then optional LLM) via `FieldStreamer.advance(cleaned)`;
-(c) voice-edit ("scratch that", "correct X to Y"). Robust cursor-proof correction = the **accessibility-API**
-path (design §11a) — a later per-OS upgrade.
+## Key files
 
-## Also note
-
-- The **DTF** project (separate repo, github.com/cspergel/DTF) got its comprehensive guide pushed
-  (`docs/DTF-GUIDE.md`) — that work is DONE, unrelated to DotFlow.
-- The installed upstream Handy was closed during testing; reopen from Start menu anytime — DotFlow is independent now.
+- Rust product core: `src-tauri/src/dotflow/` — `phrases.rs` (expand + matching), `field_stream.rs`,
+  `punctuation.rs`, `typed_expander/mod.rs`, `mod.rs` (`process_clause`, `starter_pack`, `wedge_table`).
+- `src-tauri/src/managers/phrases.rs` (SQLite library) · `commands/phrases.rs` (CRUD).
+- Injection: `src-tauri/src/clipboard.rs` (`inject_field_edit` char‑by‑char, `inject_bulk` clipboard,
+  `is_injecting`/`InjectGuard`). Dictation stop path + `dictation-state` event: `src-tauri/src/actions.rs`.
+  Field‑streaming hooks: `src-tauri/src/managers/transcription.rs`. Settings: `src-tauri/src/settings.rs`.
+  Window/frameless/commands: `src-tauri/src/lib.rs`. Perms: `src-tauri/capabilities/default.json`.
+- Frontend: `src/App.tsx` (view modes + resize + `dictation-state`), `src/components/DragonBar.tsx`,
+  `TitleBar.tsx`, `Sidebar.tsx`, `settings/phrases/PhrasesSettings.tsx`, `settings/FieldStream*.tsx`,
+  `icons/HandyTextLogo.tsx` (wordmark) + `HandyHand.tsx` (mark), `styles/theme.css` (emerald),
+  `icon-source.png` (brand source → `bunx @tauri-apps/cli icon icon-source.png`).
