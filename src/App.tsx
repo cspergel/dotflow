@@ -15,6 +15,7 @@ import Onboarding, { AccessibilityOnboarding } from "./components/onboarding";
 import { Sidebar, SidebarSection, SECTIONS_CONFIG } from "./components/Sidebar";
 import { TitleBar } from "./components/TitleBar";
 import { DragonBar } from "./components/DragonBar";
+import { MiniBar } from "./components/MiniBar";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { LogicalSize } from "@tauri-apps/api/dpi";
 import { WhatsNewGate } from "./components/whats-new";
@@ -41,17 +42,23 @@ function App() {
   const [isReturningUser, setIsReturningUser] = useState(false);
   const [currentSection, setCurrentSection] =
     useState<SidebarSection>("general");
-  // Dragon-style compact bar vs the full app. Switching resizes the window.
-  const [viewMode, setViewMode] = useState<"full" | "bar">("full");
-  // Live dictation state (backend emits on record start/stop) — colors the compact bar.
+  // Three tiers, each resizing the window: the full app, the Dragon-style compact bar, and a super-compact
+  // "mini" strip (mic + wordmark + settings/expand only).
+  const [viewMode, setViewMode] = useState<"full" | "bar" | "mini">("full");
+  // Live dictation state (backend emits on record start/stop) — colors the compact bars.
   const [isDictating, setIsDictating] = useState(false);
 
-  const applyViewMode = async (mode: "full" | "bar") => {
+  const applyViewMode = async (mode: "full" | "bar" | "mini") => {
     setViewMode(mode);
     try {
       const win = getCurrentWindow();
-      if (mode === "bar") {
-        // Lower the min BEFORE shrinking, or the window is clamped to the full size.
+      if (mode === "mini") {
+        // Lower the min BEFORE shrinking, or the window is clamped to the current size.
+        await win.setMinSize(new LogicalSize(150, 36));
+        await win.setResizable(false);
+        await win.setSize(new LogicalSize(178, 40));
+        await win.setAlwaysOnTop(true);
+      } else if (mode === "bar") {
         await win.setMinSize(new LogicalSize(300, 40));
         await win.setResizable(false);
         await win.setSize(new LogicalSize(360, 44));
@@ -301,13 +308,28 @@ function App() {
     return <Onboarding onModelSelected={handleModelSelected} />;
   }
 
-  // Dragon-style compact bar: just the dictation status + shortcut, expandable back to the full app.
+  // Super-compact strip: mic + wordmark + settings/expand only.
+  if (viewMode === "mini") {
+    return (
+      <div dir={direction} className="h-screen bg-background">
+        <Toaster theme="system" />
+        <MiniBar
+          onExpand={() => applyViewMode("bar")}
+          onSettings={() => applyViewMode("full")}
+          isDictating={isDictating}
+        />
+      </div>
+    );
+  }
+
+  // Dragon-style compact bar: dictation status + shortcut. Expands to the full app, or shrinks to mini.
   if (viewMode === "bar") {
     return (
       <div dir={direction} className="h-screen bg-background">
         <Toaster theme="system" />
         <DragonBar
           onExpand={() => applyViewMode("full")}
+          onShrink={() => applyViewMode("mini")}
           isDictating={isDictating}
         />
       </div>

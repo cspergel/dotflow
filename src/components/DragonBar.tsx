@@ -1,5 +1,5 @@
 import React from "react";
-import { Maximize2, Mic } from "lucide-react";
+import { Maximize2, Mic, Minimize2 } from "lucide-react";
 import HandyTextLogo from "./icons/HandyTextLogo";
 import { useSettings } from "../hooks/useSettings";
 
@@ -25,11 +25,13 @@ const prettyKey = (binding?: string): string | null => {
 
 interface DragonBarProps {
   onExpand: () => void;
+  onShrink: () => void;
   isDictating: boolean;
 }
 
 export const DragonBar: React.FC<DragonBarProps> = ({
   onExpand,
+  onShrink,
   isDictating,
 }) => {
   const { settings } = useSettings();
@@ -78,6 +80,13 @@ export const DragonBar: React.FC<DragonBarProps> = ({
             </kbd>
           </span>
         )}
+        <button
+          onClick={onShrink}
+          title="Shrink to mini bar"
+          className="flex items-center justify-center h-6 w-6 rounded-md text-text/50 hover:bg-mid-gray/10 hover:text-logo-primary transition-colors"
+        >
+          <Minimize2 size={13} />
+        </button>
         <button
           onClick={onExpand}
           title="Expand"
