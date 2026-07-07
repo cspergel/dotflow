@@ -45,13 +45,18 @@ powers spoken triggers). Step 1 (safe foundation, off by default) is **done** (`
 - [x] Upstream sync check (2026-07-07): `upstream/main` head is `0a59e1f` — the last sync point, so **no new
       commits to port**. Re-run `git fetch upstream && git log --oneline 0a59e1f..upstream/main` next week.
 
-### 3. Premium redesign (expanded window)
+### 3. Premium redesign (expanded window) — good pause point (more polish possible later)
 
-- [ ] Linear/Raycast look: surface-ladder colors + 1px hairline borders + **no drop shadows** +
-      medium-weight (500) headings, tight tracking + constrained content width (~640–720px) + settings as
-      grouped hairline-separated rows (not card-per-setting).
+- [x] Surface-ladder look (off-white canvas → white panels → inset controls, green-biased hairlines, no
+      shadows), Geist bundled font, emerald reserved for meaning, refined toggles/titlebar/inputs.
+- [x] DotFlow-specific IA: grouped sidebar (DICTATE / REVIEW / SYSTEM) with Phrases elevated + emerald rail.
+- [x] Trimmed model catalog (Parakeet V3/V2 · Whisper Small/Turbo/Large-v3 · Moonshine V2 streaming).
+- [x] Super-compact "mini" bar tier; removed Handy donate + acknowledgements.
+- [ ] _Optional future polish:_ deeper visual refinement (the design can still improve — paused here by
+      choice to move to task 4). Remaining pages still on old tokens: History, Post-processing, Phrases,
+      General, Debug (they work; not yet ladder-styled).
 
-### 4. Clean-up-selected-text hotkey
+### 4. Clean-up-selected-text hotkey (IN PROGRESS)
 
 - [ ] A 2nd hotkey that sends the SELECTED text to the post-process LLM (Ctrl+C → read clipboard → LLM
       cleanup prompt → paste result). Reuses existing post-processing + clipboard infra.
