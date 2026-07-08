@@ -924,10 +924,12 @@ pub(crate) async fn resolve_cleanup(settings: &AppSettings, text: &str) -> Strin
     }
 }
 
-/// The "clean up selected text" hotkey pipeline: copy the selection, run it through the post-process LLM
-/// with the cleanup prompt, paste the result over the selection, and restore the user's original clipboard.
-/// The synchronous clipboard/keystroke work runs on a blocking thread; only the LLM call is awaited.
-async fn cleanup_selection(app: &AppHandle) -> Result<(), String> {
+/// Copy the current selection using the wait-for-release + clipboard-sentinel dance, restoring the
+/// user's clipboard on the "nothing selected" path. Returns `(original_clipboard, selected_text)` or
+/// `None` when no selection was detected. Shared by the cleanup and review hotkeys.
+///
+/// The synchronous clipboard/keystroke work runs on a blocking thread.
+async fn copy_selection(app: &AppHandle) -> Result<Option<(String, String)>, String> {
     use tauri_plugin_clipboard_manager::ClipboardExt;
 
     // A near-impossible clipboard marker: we prime the clipboard with it, then watch for our synthetic Ctrl+C
@@ -975,19 +977,32 @@ async fn cleanup_selection(app: &AppHandle) -> Result<(), String> {
         (original, selected)
     })
     .await
-    .map_err(|e| format!("cleanup copy task failed: {e}"))?;
+    .map_err(|e| format!("copy task failed: {e}"))?;
 
     // No selection: the copy never overwrote the sentinel. Restore and bail quietly.
     if selected.trim().is_empty() || selected == SENTINEL {
-        debug!("Cleanup hotkey: no selection detected — nothing to do");
+        debug!("copy_selection: no selection detected");
         let app_c = app.clone();
         let orig = original.clone();
         let _ = tauri::async_runtime::spawn_blocking(move || {
             let _ = app_c.clipboard().write_text(&orig);
         })
         .await;
-        return Ok(());
+        return Ok(None);
     }
+
+    Ok(Some((original, selected)))
+}
+
+/// The "clean up selected text" hotkey pipeline: copy the selection, run it through the post-process LLM
+/// with the cleanup prompt, paste the result over the selection, and restore the user's original clipboard.
+/// The synchronous clipboard/keystroke work runs on a blocking thread; only the LLM call is awaited.
+async fn cleanup_selection(app: &AppHandle) -> Result<(), String> {
+    use tauri_plugin_clipboard_manager::ClipboardExt;
+
+    let Some((original, selected)) = copy_selection(app).await? else {
+        return Ok(());
+    };
 
     // Phase 2 (async): run the shared cleanup pipeline.
     let settings = get_settings(app);
