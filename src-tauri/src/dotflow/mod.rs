@@ -13,6 +13,7 @@
 pub mod cleanup;
 pub mod field_stream;
 pub mod grammar;
+pub mod overlay_pos;
 pub mod phrases;
 pub mod punctuation;
 pub mod typed_expander;
