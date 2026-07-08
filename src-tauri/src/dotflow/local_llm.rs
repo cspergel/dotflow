@@ -2,7 +2,7 @@
 //!
 //! This is the effectful, offline text-generation shell that DotFlow's selection→review overlay
 //! will call to rewrite/clean up a highlighted passage using a small local instruct model. It wraps
-//! the `llama-cpp-2` crate (v0.1.139) — a thin, *unsafe* binding over llama.cpp — behind a single
+//! the `llama-cpp-2` crate (v0.1.151) — a thin, *unsafe* binding over llama.cpp — behind a single
 //! total-ish function that never panics into the caller: any llama.cpp panic is caught and mapped to
 //! `Err(String)` so a bad model / OOM / assert cannot take down the Tauri app.
 //!
@@ -19,7 +19,7 @@
 //! cache lock is held, so concurrent transforms serialize — fine, since DotFlow rewrites one selection
 //! at a time.
 //!
-//! API shape used (llama-cpp-2 0.1.139):
+//! API shape used (llama-cpp-2 0.1.151):
 //!   LlamaBackend::init() -> once, stored in OnceLock
 //!   LlamaModelParams::default().with_n_gpu_layers(0)
 //!   LlamaModel::load_from_file(&backend, path, &params)
