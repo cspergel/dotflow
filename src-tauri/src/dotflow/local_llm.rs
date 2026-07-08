@@ -125,6 +125,20 @@ fn with_cached_model<T>(
     f(backend, &cached.model)
 }
 
+/// Drop the process-wide cached model, freeing its ~1-2 GB immediately.
+///
+/// Called when the active model's file is deleted so we don't keep a now-orphaned model resident (and,
+/// worse, keep serving generations from a model whose backing file is gone). The lock is recovered on
+/// poison (`into_inner`) for the same reason [`with_cached_model`] does: the cache only holds a loaded
+/// model, so clearing it is always safe regardless of a prior panic. A subsequent `generate*` call sees
+/// an empty cache and reloads from disk (or errors cleanly if the file is missing).
+pub fn evict_cache() {
+    let mut guard = MODEL_CACHE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    *guard = None;
+}
+
 /// Generate text from a local GGUF instruct model, fully offline on CPU.
 ///
 /// `prompt` is fed verbatim (the caller is responsible for any chat-template wrapping, e.g. ChatML for
@@ -274,6 +288,23 @@ fn run_generation(
         ));
     }
 
+    // Cap the new-token budget to what actually fits in the KV cache. The prompt was validated to fit,
+    // but greedy decoding appends up to `max_new_tokens` more; without this cap a long prompt + long
+    // budget overflows the context mid-decode and surfaces as a confusing "failed to decode token".
+    // Leave a small margin below the hard limit for safety.
+    const CTX_MARGIN: usize = 8;
+    let room_for_new = n_ctx_usize
+        .saturating_sub(tokens.len())
+        .saturating_sub(CTX_MARGIN);
+    if room_for_new == 0 {
+        return Err(format!(
+            "prompt too long for the model's context window ({} tokens used of {}, no room to generate)",
+            tokens.len(),
+            n_ctx
+        ));
+    }
+    let effective_max_new = max_new_tokens.min(room_for_new);
+
     // Batch must hold the whole prompt for the initial decode; size it to the context window.
     let mut batch = LlamaBatch::new(n_ctx_usize, 1);
     let last_prompt_index = (tokens.len() - 1) as i32;
@@ -295,7 +326,7 @@ fn run_generation(
     let mut output = String::new();
     let mut n_cur = batch.n_tokens();
 
-    for _ in 0..max_new_tokens {
+    for _ in 0..effective_max_new {
         // Sample from the logits of the last token in the current batch.
         let token = sampler.sample(&ctx, batch.n_tokens() - 1);
         sampler.accept(token);

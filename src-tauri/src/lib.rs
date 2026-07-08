@@ -698,6 +698,7 @@ pub fn run(cli_args: CliArgs) {
             commands::ai::ai_transform_available,
             commands::llm::list_llm_models,
             commands::llm::download_llm_model,
+            commands::llm::cancel_llm_download,
             commands::llm::select_llm_model,
             commands::llm::delete_llm_model,
             shortcut::change_selection_review_enabled_setting,

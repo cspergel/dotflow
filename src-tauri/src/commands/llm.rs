@@ -14,10 +14,11 @@
 //! and `llm-download-failed` so the UI can show a progress bar — mirroring the STT
 //! `model-download-*` events but on a distinct channel so the two pickers never cross-talk.
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
-use std::sync::{Mutex, OnceLock};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use futures_util::StreamExt;
@@ -28,18 +29,24 @@ use crate::dotflow::llm_catalog::{self, LlmModelInfo};
 use crate::managers::model::DownloadProgress;
 use crate::settings::{get_settings, write_settings};
 
-/// Process-wide set of model ids with an in-flight download, so a second `download_llm_model` for the
-/// same id is rejected instead of racing the first onto the same `.partial` file.
-fn in_flight() -> &'static Mutex<HashSet<String>> {
-    static S: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
-    S.get_or_init(|| Mutex::new(HashSet::new()))
+/// Process-wide registry of in-flight downloads: model id → its cancel flag. A key's presence means a
+/// download is running (so a second `download_llm_model` for the same id is rejected instead of racing
+/// the first onto the same `.partial` file); the [`AtomicBool`] is the cooperative cancel signal that
+/// [`cancel_llm_download`] flips and the byte-stream loop polls. Poison is recovered (`into_inner`) so a
+/// panic while the lock is held can't wedge every future download.
+fn in_flight() -> &'static Mutex<HashMap<String, Arc<AtomicBool>>> {
+    static S: OnceLock<Mutex<HashMap<String, Arc<AtomicBool>>>> = OnceLock::new();
+    S.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// RAII guard that removes a model id from the in-flight set on every exit path.
+/// RAII guard that removes a model id from the in-flight registry on every exit path.
 struct InFlightGuard(String);
 impl Drop for InFlightGuard {
     fn drop(&mut self) {
-        in_flight().lock().unwrap().remove(&self.0);
+        in_flight()
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .remove(&self.0);
     }
 }
 
@@ -74,6 +81,11 @@ pub async fn download_llm_model(app: AppHandle, id: String) -> Result<(), String
         Ok(()) => {
             let _ = app.emit("llm-download-complete", &id);
         }
+        // A user-initiated cancel isn't a failure: surface it on its own channel so the UI can reset
+        // the row quietly instead of showing an error banner.
+        Err(error) if error == CANCELLED_MSG => {
+            let _ = app.emit("llm-download-cancelled", &id);
+        }
         Err(error) => {
             let _ = app.emit(
                 "llm-download-failed",
@@ -82,6 +94,27 @@ pub async fn download_llm_model(app: AppHandle, id: String) -> Result<(), String
         }
     }
     result
+}
+
+/// Sentinel error returned by [`download_llm_model_inner`] when the download was cancelled via
+/// [`cancel_llm_download`]. The outer command matches on it to emit `llm-download-cancelled` rather than
+/// `llm-download-failed`.
+const CANCELLED_MSG: &str = "Download cancelled";
+
+/// Cancel an in-flight [`download_llm_model`] for `id` by flipping its cancel flag; the download loop
+/// polls this and aborts, cleaning up its `.partial`. No-op (still `Ok`) if no download is running for
+/// that id — the caller just wanted it stopped, and it already is.
+#[tauri::command]
+#[specta::specta]
+pub fn cancel_llm_download(_app: AppHandle, id: String) -> Result<(), String> {
+    if let Some(flag) = in_flight()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .get(&id)
+    {
+        flag.store(true, Ordering::Relaxed);
+    }
+    Ok(())
 }
 
 async fn download_llm_model_inner(app: &AppHandle, id: &str) -> Result<(), String> {
@@ -101,12 +134,14 @@ async fn download_llm_model_inner(app: &AppHandle, id: &str) -> Result<(), Strin
         return Ok(());
     }
 
-    // Single-flight per id.
+    // Single-flight per id, and register this download's cancel flag.
+    let cancel_flag = Arc::new(AtomicBool::new(false));
     {
-        let mut set = in_flight().lock().unwrap();
-        if !set.insert(id.to_string()) {
+        let mut set = in_flight().lock().unwrap_or_else(|p| p.into_inner());
+        if set.contains_key(id) {
             return Err(format!("Download already in progress: {id}"));
         }
+        set.insert(id.to_string(), cancel_flag.clone());
     }
     let _guard = InFlightGuard(id.to_string());
 
@@ -193,6 +228,13 @@ async fn download_llm_model_inner(app: &AppHandle, id: &str) -> Result<(), Strin
     let throttle = Duration::from_millis(100);
     let mut stream = response.bytes_stream();
     while let Some(chunk) = stream.next().await {
+        // Cooperative cancellation: drop the connection, discard the partial, and report the cancel.
+        if cancel_flag.load(Ordering::Relaxed) {
+            drop(file);
+            let _ = fs::remove_file(&partial_path);
+            info!("LLM download cancelled: {id}");
+            return Err(CANCELLED_MSG.to_string());
+        }
         let chunk = chunk.map_err(|e| format!("Download stream error: {e}"))?;
         file.write_all(&chunk)
             .map_err(|e| format!("Failed to write file: {e}"))?;
@@ -266,6 +308,11 @@ pub fn delete_llm_model(app: AppHandle, id: String) -> Result<(), String> {
     if std::path::PathBuf::from(settings.local_llm_model_path.trim()) == path {
         settings.local_llm_model_path = String::new();
         write_settings(&app, settings);
+        // The deleted model was the active one — evict it from the process-wide cache so we don't keep
+        // ~1-2 GB resident for a model whose file no longer exists. Gated: the cache only exists in
+        // `local-llm` builds (this command is otherwise feature-independent).
+        #[cfg(feature = "local-llm")]
+        crate::dotflow::local_llm::evict_cache();
     }
     let _ = app.emit("llm-models-updated", ());
     Ok(())
