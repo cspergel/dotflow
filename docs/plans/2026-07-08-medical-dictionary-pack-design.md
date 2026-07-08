@@ -46,6 +46,34 @@ license must be clean.
 > hand-edit is recoverable without a reinstall. This new loading/seeding surface should get a focused
 > re-sweep before implementation.
 
+> **Re-sweep 2 fold (2026-07-08, runtime-loadable delta).** A 2-lens re-sweep HALTED the loadable design with
+> 2 HIGH + a MEDIUM cluster; all folded, marked `[RS2-Fn]`:
+> - **[RS2-F1] HIGH — homograph collateral.** The silent auto-fix drop-filter, fed the raw pack-term set,
+>   would suppress *legitimate* corrections whose replacement/original is a common-English homograph in a
+>   medical list (`cold`, `stroke`, `discharge`). **Fix:** the drop-set is **enabled-pack terms MINUS Harper's
+>   curated dictionary** — the wrong-drug concern only applies to non-English jargon, so homographs (in
+>   curated) are excluded and their normal corrections still apply. Adds a **negative-collateral test**.
+> - **[RS2-F2] HIGH — OOM.** Size cap must be **metadata-gated**: `fs::metadata().len()` check *before* any
+>   read (never `fs::read` then check).
+> - **[RS2-F3] Seeding cluster → simplify.** The **default medical pack is bundled and always-current** (read
+>   from the compiled resource each run), **not** seeded as an editable file. The runtime-loadable dir is for
+>   **additional** packs only (drop-in `legal.txt`, custom, add-on). This eliminates never-clobber-freezes-
+>   fixes, non-atomic-seed, empty-dead-pack, seed/scan-race, and resource-silent-noop findings together. User
+>   customization of the medical list = a separate supplemental pack file, never an edit to the shipped default.
+> - **[RS2-F4] Per-pack build isolation for real.** Build a **separate `FstDictionary` per pack**, each in its
+>   own `catch_unwind`, added individually to the `MergedDictionary` — one bad add-on pack degrades only
+>   itself. Test 7 gets a build-path case (not only read/parse).
+> - **[RS2-F5] Reload forces rebuild** regardless of the id-set key (or key on content mtime), so editing an
+>   already-enabled pack's contents takes effect. Test: edit an enabled pack, Reload, assert the new term lands.
+> - **[RS2-F6] Caps + laziness:** cap discovered-file count and aggregate term total; cache `term_count`
+>   (mtime-keyed) instead of rescanning every file on each Settings open.
+> - **[RS2-F7] Hostile files:** require `file_type().is_file()`, do **not** follow symlinks; strip a leading
+>   **BOM** before parsing; startup seed/dir-create are **best-effort** (log + degrade to curated, never panic)
+>   for an unwritable/redirected `%APPDATA%`.
+>
+> Re-sweep refuted the classic "one bad term panics the FST build" vector: `FstDictionary::new` sort+dedups
+> before insert, so realistic content can't trip the lexicographic `expect`. No CRITICAL this round.
+
 ## Section 1 — Data model & flow
 
 New module `src-tauri/src/dotflow/dictionary_packs.rs`:
@@ -132,11 +160,14 @@ Two consumers, two behaviors — **this is the safety design**:
   medical suggestion for a nearby typo is shown to the clinician, who chooses. Human-in-the-loop → safe.
 - **`harper_cleanup` (silent auto-fix):** merged dict for acceptance, plus a **hardened drop filter** before
   applying any edit. The filter drops an edit when **either** side is medical:
+  - The filter set is the **medical-jargon set = enabled-pack terms MINUS Harper's curated dictionary**
+    ([RS2-F1]) — so pure jargon (`metoprolol`) is guarded, but homographs (`cold`, `stroke`) that are already
+    real English words are **excluded** and keep getting their normal corrections. No collateral suppression.
   - **[SWEEP-F2, casing] Replacement side, case-normalized.** Drop if the replacement, **Unicode-lowercased**,
-    is in the lowercase pack-term set. (Harper mirrors the offending word's casing into its suggestion, so a
-    raw case-sensitive match misses `Metoprolol` at sentence start — the CRITICAL bypass.)
-  - **[SWEEP-F2b] Original side.** Drop if the **original span text**, lowercased, is an accepted pack term —
-    so a *valid* drug name can't be silently rewritten to a different word by a non-spell linter (the
+    is in the medical-jargon set. (Harper mirrors the offending word's casing into its suggestion, so a raw
+    case-sensitive match misses `Metoprolol` at sentence start — the CRITICAL bypass.)
+  - **[SWEEP-F2b] Original side.** Drop if the **original span text**, lowercased, is in the medical-jargon
+    set — so a *valid* jargon term can't be silently rewritten to a different word by a non-spell linter (the
     replacement-only guard could never catch that).
   - **[SWEEP-F4] All three `Suggestion` variants.** The filter is defined for `ReplaceWith` (check text),
     `InsertAfter` (check inserted text), and `Remove` (check the original span) — not only `ReplaceWith`.
