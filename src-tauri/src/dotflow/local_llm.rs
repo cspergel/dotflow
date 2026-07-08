@@ -10,6 +10,15 @@
 //! backend without fighting over the GPU. The llama backend is initialized exactly once, process-wide,
 //! via `OnceLock` — llama.cpp's `llama_backend_init` must not run twice.
 //!
+//! Loading a GGUF from disk costs ~1-2 GB of I/O + parsing per call, so the most-recently-used model is
+//! cached process-wide in a `Mutex<Option<CachedModel>>` keyed by path (+ load params). A generate call
+//! reuses the cached model when the path matches and only reloads when the path changes. `LlamaModel` is
+//! `Send + Sync` (llama-cpp-2 marks it so), which makes caching it in a `static` sound; a fresh
+//! `LlamaContext` is still created per call (contexts are cheap and hold per-generation KV state — never
+//! reuse one). Because a context borrows `&model` out of the guard, the whole generation runs while the
+//! cache lock is held, so concurrent transforms serialize — fine, since DotFlow rewrites one selection
+//! at a time.
+//!
 //! API shape used (llama-cpp-2 0.1.139):
 //!   LlamaBackend::init() -> once, stored in OnceLock
 //!   LlamaModelParams::default().with_n_gpu_layers(0)
@@ -24,8 +33,8 @@
 
 use std::num::NonZeroU32;
 use std::panic::{catch_unwind, AssertUnwindSafe};
-use std::path::Path;
-use std::sync::OnceLock;
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 
 use llama_cpp_2::context::params::LlamaContextParams;
 use llama_cpp_2::llama_backend::LlamaBackend;
@@ -53,6 +62,67 @@ fn backend() -> Result<&'static LlamaBackend, String> {
     BACKEND
         .get()
         .ok_or_else(|| "llama backend unavailable after init".to_string())
+}
+
+/// CPU-only load: keep every layer on the CPU so we don't contend with the GPU whisper backend.
+const N_GPU_LAYERS: u32 = 0;
+
+/// A loaded GGUF plus the inputs that determined how it was loaded, so we can tell whether a cached
+/// model still matches the current request.
+struct CachedModel {
+    path: PathBuf,
+    n_gpu_layers: u32,
+    model: LlamaModel,
+}
+
+/// Most-recently-used loaded model, shared across every `generate*` call. Holds at most one model; a
+/// request for a different path drops the previous one and loads the new one. `Mutex::new` is const, so
+/// this needs no lazy initialization.
+static MODEL_CACHE: Mutex<Option<CachedModel>> = Mutex::new(None);
+
+/// Run `f` with a loaded model for `model_path`, reusing the process-wide cached model when the path and
+/// load params match, otherwise loading it (and dropping the previously cached one) first.
+///
+/// The closure runs while the cache lock is held because the `LlamaContext` it creates borrows `&model`
+/// out of the guard; this serializes concurrent generations, which is acceptable here. The lock is
+/// recovered on poison (`into_inner`): the cached model is only ever read during generation, so a panic
+/// mid-generation leaves it in a consistent state and later calls can keep using it — preserving the
+/// panic-safety guarantee of [`generate`]/[`generate_chat`].
+fn with_cached_model<T>(
+    model_path: &Path,
+    f: impl FnOnce(&LlamaBackend, &LlamaModel) -> Result<T, String>,
+) -> Result<T, String> {
+    if !model_path.exists() {
+        return Err(format!(
+            "model file does not exist: {}",
+            model_path.display()
+        ));
+    }
+
+    let backend = backend()?;
+    let mut guard = MODEL_CACHE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+    let hit = matches!(
+        guard.as_ref(),
+        Some(c) if c.path == model_path && c.n_gpu_layers == N_GPU_LAYERS
+    );
+    if !hit {
+        // Drop the previously cached model before loading so we never hold two (~1-2 GB each) at once.
+        *guard = None;
+        let model_params = LlamaModelParams::default().with_n_gpu_layers(N_GPU_LAYERS);
+        let model = LlamaModel::load_from_file(backend, model_path, &model_params)
+            .map_err(|e| format!("failed to load model: {e}"))?;
+        *guard = Some(CachedModel {
+            path: model_path.to_path_buf(),
+            n_gpu_layers: N_GPU_LAYERS,
+            model,
+        });
+    }
+
+    let cached = guard.as_ref().expect("cache populated above");
+    f(backend, &cached.model)
 }
 
 /// Generate text from a local GGUF instruct model, fully offline on CPU.
@@ -149,20 +219,10 @@ fn generate_chat_inner(
     user: &str,
     max_new_tokens: usize,
 ) -> Result<String, String> {
-    if !model_path.exists() {
-        return Err(format!(
-            "model file does not exist: {}",
-            model_path.display()
-        ));
-    }
-
-    let backend = backend()?;
-    let model_params = LlamaModelParams::default().with_n_gpu_layers(0);
-    let model = LlamaModel::load_from_file(backend, model_path, &model_params)
-        .map_err(|e| format!("failed to load model: {e}"))?;
-
-    let (prompt, add_bos) = build_chat_prompt(&model, system, user);
-    run_generation(backend, &model, &prompt, add_bos, max_new_tokens)
+    with_cached_model(model_path, |backend, model| {
+        let (prompt, add_bos) = build_chat_prompt(model, system, user);
+        run_generation(backend, model, &prompt, add_bos, max_new_tokens)
+    })
 }
 
 fn generate_inner(
@@ -170,21 +230,9 @@ fn generate_inner(
     prompt: &str,
     max_new_tokens: usize,
 ) -> Result<String, String> {
-    if !model_path.exists() {
-        return Err(format!(
-            "model file does not exist: {}",
-            model_path.display()
-        ));
-    }
-
-    let backend = backend()?;
-
-    // CPU only: keep every layer on the CPU so we don't contend with the GPU whisper backend.
-    let model_params = LlamaModelParams::default().with_n_gpu_layers(0);
-    let model = LlamaModel::load_from_file(backend, model_path, &model_params)
-        .map_err(|e| format!("failed to load model: {e}"))?;
-
-    run_generation(backend, &model, prompt, AddBos::Always, max_new_tokens)
+    with_cached_model(model_path, |backend, model| {
+        run_generation(backend, model, prompt, AddBos::Always, max_new_tokens)
+    })
 }
 
 /// Create a context, tokenize `prompt`, and greedily decode up to `max_new_tokens`. Shared by the plain
