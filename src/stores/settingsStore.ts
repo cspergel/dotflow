@@ -161,6 +161,8 @@ const settingUpdaters: {
     commands.changeTranscribeGpuDevice(value as number),
   extra_recording_buffer_ms: (value) =>
     commands.changeExtraRecordingBufferSetting(value as number),
+  selection_review_enabled: (value) =>
+    commands.changeSelectionReviewEnabledSetting(value as boolean),
   experimental_typed_expander: (value) =>
     commands.changeTypedExpanderSetting(value as boolean),
   typed_expander_sound: (value) =>

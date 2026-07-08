@@ -661,6 +661,7 @@ pub fn run(cli_args: CliArgs) {
             commands::cleanup::preview_cleanup,
             commands::cleanup::analyze_text,
             commands::cleanup::post_process_is_configured,
+            shortcut::change_selection_review_enabled_setting,
             helpers::clamshell::is_laptop,
         ])
         .events(collect_events![
