@@ -93,6 +93,31 @@ in and wired to the Ctrl+Shift+U hotkey (see commit `e7f8a75`).
 - [ ] _Deferred:_ in-app highlighting _inside other apps_ (Gmail/Outlook) — needs per-app accessibility /
       overlay integration (the hard Grammarly path). Revisit only if we commit to it.
 
+## AI actions on the local model — prioritized (2026-07-08)
+
+Now that the local-LLM runtime + `ai_transform` seam + model picker exist (branch
+`feat/selection-review-overlay`), these are the next capabilities. **Anti-bloat principle:** do NOT add a
+chip per action. Instead evolve the selection popup into **one command surface** — a single "type or dictate
+what to do" input + 2–3 pinned quick actions + a small context-aware "more…" list. That input *is* the
+custom-instruction box, *is* the dictation-command entry point, and scales to unlimited actions with zero
+clutter. Every action below is a prompt behind that surface, not a new button.
+
+> **Gate:** do NOT implement any of this until the prior work (overlay + local AI + Nemotron on this branch)
+> is live-tested and merged.
+
+- [ ] **P1 — Command surface + custom instructions** (foundation; moderate effort). Evolve the review card
+      into the command surface above. Detailed spec: `docs/plans/2026-07-08-command-surface-design.md`.
+- [ ] **P2 — Named actions as prompts** (low effort each, on the existing seam): **Translate** (offline —
+      biggest differentiator; dictate/pick target language) first, then Tone presets (one "Tone ▾", not 5
+      chips), Expand, Extract, Reply. Plus a **"Structure → SOAP note"** action — the highest-value one for
+      the medical beachhead (freeform dictation → Subjective/Objective/Assessment/Plan).
+- [ ] **P3 — Dictation command mode** (moderate–high; the on-brand one): a hands-free flow — mode/wake-word →
+      dictate a command → acts on the selection/field → inserts. Tiny model routes intent, small model (Gemma)
+      executes. Agent-lite, dictation-focused.
+- [ ] **P4 — Vision** (high; model-dependent — DEFERRED): screenshot a region → summarize/extract → insert.
+      Gemma 4 E2B ships vision (`mmproj-*.gguf`) and llama.cpp supports multimodal, but `llama-cpp-2` needs
+      the multimodal (mtmd) path wired. Park until P1–P3 land.
+
 ## Later / backlog
 
 - Phone-as-microphone (LAN web page, QR pair, WebSocket audio → transcribe pipeline). Likely last.
