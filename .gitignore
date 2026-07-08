@@ -1,3 +1,6 @@
+# Git worktrees (isolated feature workspaces)
+.worktrees/
+
 # Logs
 logs
 *.log
