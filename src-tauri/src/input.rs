@@ -137,11 +137,36 @@ pub fn wait_for_modifiers_released(timeout_ms: u64) {
 #[cfg(not(target_os = "windows"))]
 pub fn wait_for_modifiers_released(_timeout_ms: u64) {}
 
-/// Release the modifier keys (Shift/Ctrl/Alt/Meta) at the OS level. Used before the cleanup hotkey
-/// synthesizes a Ctrl+C: the user is typically still holding the trigger combo (e.g. Ctrl+Shift+U), and
-/// those held modifiers would otherwise turn our synthetic Ctrl+C into Ctrl+Shift+C (which doesn't copy).
-/// Sending key-UPs clears the OS modifier state so the following copy is clean.
+/// Release the modifier keys at the OS level, but ONLY the ones physically held right now. Used before
+/// the cleanup/review hotkeys synthesize a Ctrl+C: the user may still be holding the trigger combo (e.g.
+/// Ctrl+Shift+U), and those held modifiers would otherwise turn our synthetic Ctrl+C into Ctrl+Shift+C
+/// (which doesn't copy).
+///
+/// IMPORTANT: we must NOT send a key-UP for a modifier that isn't held. A spurious **Alt** key-up flips
+/// WinUI apps (the new Windows 11 Notepad, etc.) into Alt-menu / KeyTip mode, which drops the text
+/// selection so the following synthetic Ctrl+C copies nothing (observed as "copy landed but selection
+/// was empty", plus KeyTip letters appearing over the app's toolbar). `wait_for_modifiers_released`
+/// usually clears the real modifiers first, so this guard means we typically send zero spurious ups.
 pub fn release_modifiers(enigo: &mut Enigo) {
+    #[cfg(target_os = "windows")]
+    {
+        use windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
+        // (virtual-key, enigo Key). VK_SHIFT/CONTROL/MENU(alt)/LWIN/RWIN.
+        const MODS: [(i32, Key); 5] = [
+            (0x10, Key::Shift),
+            (0x11, Key::Control),
+            (0x12, Key::Alt),
+            (0x5B, Key::Meta),
+            (0x5C, Key::Meta),
+        ];
+        for (vk, key) in MODS {
+            let held = (unsafe { GetAsyncKeyState(vk) } as u16 & 0x8000) != 0;
+            if held {
+                let _ = enigo.key(key, enigo::Direction::Release);
+            }
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
     for key in [Key::Shift, Key::Control, Key::Alt, Key::Meta] {
         let _ = enigo.key(key, enigo::Direction::Release);
     }

@@ -981,7 +981,14 @@ async fn copy_selection(app: &AppHandle) -> Result<Option<(String, String)>, Str
 
     // No selection: the copy never overwrote the sentinel. Restore and bail quietly.
     if selected.trim().is_empty() || selected == SENTINEL {
-        debug!("copy_selection: no selection detected");
+        // [DIAG] Distinguish "synthetic Ctrl+C never landed" (sentinel survived — e.g. the app entered
+        // menu/KeyTip mode and ate the keystroke) from a genuinely empty selection.
+        let reason = if selected == SENTINEL {
+            "sentinel SURVIVED — synthetic Ctrl+C never landed (app in menu/keytip mode?)"
+        } else {
+            "copy landed but selection was empty"
+        };
+        log::info!("copy_selection: no usable selection ({reason})");
         let app_c = app.clone();
         let orig = original.clone();
         let _ = tauri::async_runtime::spawn_blocking(move || {
@@ -991,6 +998,10 @@ async fn copy_selection(app: &AppHandle) -> Result<Option<(String, String)>, Str
         return Ok(None);
     }
 
+    log::info!(
+        "copy_selection: captured {} chars",
+        selected.chars().count()
+    );
     Ok(Some((original, selected)))
 }
 
