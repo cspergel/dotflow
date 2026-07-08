@@ -1,2 +1,28 @@
 @import "tailwindcss";
 @import "../../styles/theme.css";
+
+/* [F7] ReviewPanel + the review card are built from Tailwind v4 utilities that resolve the DotFlow color
+ * tokens (bg-panel, border-hairline, text-accent, text-muted, …). Tailwind only emits those utilities where
+ * the tokens are registered via `@theme inline` — which otherwise lives only in the main entry's App.css.
+ * Re-register them here so the standalone review-overlay entry renders styled (theme.css alone defines the
+ * CSS variables but not the utilities). */
+@theme inline {
+  --color-text: var(--color-text);
+  --color-background: var(--color-background);
+  --color-panel: var(--color-panel);
+  --color-inset: var(--color-inset);
+  --color-hairline: var(--color-hairline);
+  --color-hairline-strong: var(--color-hairline-strong);
+  --color-muted: var(--color-muted);
+  --color-faint: var(--color-faint);
+  --color-background-ui: var(--color-background-ui);
+  --color-accent: var(--color-accent);
+  --color-accent-tint: var(--color-accent-tint);
+  --color-logo-primary: var(--color-logo-primary);
+  --color-logo-stroke: var(--color-logo-stroke);
+  --color-text-stroke: var(--color-text-stroke);
+  --color-mid-gray: var(--color-mid-gray);
+
+  --font-sans:
+    "Geist", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+}
