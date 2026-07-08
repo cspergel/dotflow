@@ -437,6 +437,10 @@ pub fn init_shortcuts(app: &AppHandle) -> Result<(), String> {
         if id == "transcribe_with_post_process" && !user_settings.post_process_enabled {
             continue;
         }
+        // Skip the selection-review shortcut when the feature is disabled
+        if id == "review_selection" && !user_settings.selection_review_enabled {
+            continue;
+        }
 
         let binding = user_settings
             .bindings

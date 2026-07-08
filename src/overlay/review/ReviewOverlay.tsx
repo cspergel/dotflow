@@ -1,0 +1,402 @@
+/**
+ * Selection-review overlay card.
+ *
+ * A focusable, draggable card the review hotkey pops near the cursor. It shows the offline Proofread
+ * review (Harper, via ReviewPanel) plus AI action chips (Rewrite / Formal / Summarize) that call the
+ * `ai_transform` backend command (cloud/Ollama post-processor, else a local offline GGUF model) and show a
+ * before→after result. The chips stay disabled until an AI backend is available. Apply pastes the reviewed
+ * result back into the source field; Copy puts it on the clipboard; Close cancels; clicking away dismisses
+ * it. The window sizes itself to the card's content and is not forced always-on-top.
+ */
+import { listen } from "@tauri-apps/api/event";
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { LogicalSize } from "@tauri-apps/api/dpi";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
+import { commands } from "@/bindings";
+import { ReviewPanel } from "@/components/settings/cleanup/ReviewPanel";
+
+export type ReviewAction = "proofread" | "rewrite" | "formal" | "summarize";
+
+const CARD_WIDTH = 420;
+const CARD_MAX_HEIGHT = 480;
+const CARD_MIN_HEIGHT = 96;
+// Height of the non-scrolling chrome (title bar + chip row + footer). The scrolling body is capped at
+// CARD_MAX_HEIGHT minus this, so the body cap and the window's max height share one source of truth and
+// can't drift apart.
+const CARD_CHROME_HEIGHT = 120;
+const CARD_BODY_MAX_HEIGHT = CARD_MAX_HEIGHT - CARD_CHROME_HEIGHT;
+
+/**
+ * Pure chip-gating predicate: Proofread is offline and always available; the AI actions
+ * (rewrite/formal/summarize) require a configured AI backend. Exported so the gating is trivially
+ * inspectable (exercise-verified in Task A11 — the repo has no JS test runner).
+ */
+export function chipEnabled(
+  action: ReviewAction,
+  aiAvailable: boolean,
+): boolean {
+  return action === "proofread" ? true : aiAvailable;
+}
+
+const AI_ACTIONS: ReviewAction[] = ["rewrite", "formal", "summarize"];
+
+const ReviewOverlay: React.FC = () => {
+  const { t } = useTranslation();
+  const [text, setText] = useState("");
+  const [aiAvailable, setAiAvailable] = useState(false);
+  const [activeAction, setActiveAction] = useState<ReviewAction>("proofread");
+  const [reviewResult, setReviewResult] = useState("");
+  // AI-transform (Rewrite / Formal / Summarize) state. `aiResult` is the model's output; it's mirrored
+  // into `reviewResult` so Apply/Copy use it. `aiRetryNonce` re-triggers the run when the user hits Retry.
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError] = useState<string | null>(null);
+  const [aiResult, setAiResult] = useState("");
+  const [aiRetryNonce, setAiRetryNonce] = useState(0);
+  // True when an AI action ran against empty/whitespace-only text — surfaces a "nothing to transform"
+  // note instead of a silent no-op. `actionError` surfaces Apply/Copy failures inline in the card.
+  const [aiEmpty, setAiEmpty] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const cardRef = useRef<HTMLDivElement>(null);
+
+  // Listeners + pull-on-mount [F11]. The backend emits "review-text" immediately after show(), which can
+  // race this effect's listener registration, so we also PULL the stored payload via getPendingReview();
+  // whichever arrives first wins (setting the same text twice is harmless).
+  useEffect(() => {
+    let cancelled = false;
+    let unlistenText: (() => void) | undefined;
+    let unlistenHide: (() => void) | undefined;
+
+    const applyPayload = (nextText: string, ai: boolean) => {
+      setText(nextText);
+      setAiAvailable(ai);
+      setActiveAction("proofread");
+      setReviewResult("");
+      setAiResult("");
+      setAiError(null);
+      setAiLoading(false);
+      setAiEmpty(false);
+      setActionError(null);
+    };
+
+    const setup = async () => {
+      unlistenText = await listen("review-text", (event) => {
+        const payload = event.payload as {
+          text: string;
+          ai_available: boolean;
+        };
+        applyPayload(payload.text, payload.ai_available);
+      });
+      unlistenHide = await listen("review-hide", () => {
+        setText("");
+        setReviewResult("");
+        setActiveAction("proofread");
+        setAiResult("");
+        setAiError(null);
+        setAiLoading(false);
+        setAiEmpty(false);
+        setActionError(null);
+      });
+
+      if (cancelled) {
+        unlistenText?.();
+        unlistenHide?.();
+        return;
+      }
+
+      const pending = await commands.getPendingReview();
+      if (pending && !cancelled) {
+        applyPayload(pending[0], pending[1]);
+      }
+    };
+
+    void setup();
+
+    return () => {
+      cancelled = true;
+      unlistenText?.();
+      unlistenHide?.();
+    };
+  }, []);
+
+  const handleApply = useCallback(async () => {
+    setActionError(null);
+    try {
+      const res = await commands.applyReviewResult(reviewResult || text);
+      if (res.status === "error") {
+        setActionError(res.error);
+      }
+      // On success the backend closes the overlay; nothing more to do here.
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : String(e));
+    }
+  }, [reviewResult, text]);
+
+  const handleCopy = useCallback(async () => {
+    setActionError(null);
+    try {
+      await navigator.clipboard.writeText(reviewResult || text);
+    } catch (e) {
+      setActionError(
+        t(
+          "settings.review.copyFailed",
+          "Couldn't copy to clipboard: {{error}}",
+          { error: e instanceof Error ? e.message : String(e) },
+        ),
+      );
+    }
+  }, [reviewResult, text, t]);
+
+  const handleClose = useCallback(async () => {
+    await commands.cancelReview();
+  }, []);
+
+  // Run the AI transform whenever an AI action becomes active (or Retry bumps the nonce). Proofread is
+  // offline and handled by ReviewPanel, so it clears any AI state and does nothing here. The `cancelled`
+  // guard drops a stale in-flight result if the user switches actions before it resolves.
+  useEffect(() => {
+    if (activeAction === "proofread") {
+      setAiLoading(false);
+      setAiError(null);
+      setAiResult("");
+      setAiEmpty(false);
+      return;
+    }
+    // Guard against transforming empty/whitespace-only text. Selection always has content in practice,
+    // but surface a short note instead of a silent early-return no-op.
+    if (!text.trim()) {
+      setAiLoading(false);
+      setAiError(null);
+      setAiResult("");
+      setAiEmpty(true);
+      return;
+    }
+
+    let cancelled = false;
+    setAiEmpty(false);
+    setAiLoading(true);
+    setAiError(null);
+    setAiResult("");
+    // Clear any stale result from a previous action so Apply/Copy can't paste the WRONG output during the
+    // "Working…" window: `reviewResult || text` now falls back to the original text, not the prior result.
+    setReviewResult("");
+    void commands
+      .aiTransform(text, activeAction)
+      .then((res) => {
+        if (cancelled) return;
+        if (res.status === "ok") {
+          setAiResult(res.data);
+          setReviewResult(res.data);
+        } else {
+          setAiError(res.error);
+        }
+      })
+      .catch((e: unknown) => {
+        if (!cancelled) setAiError(e instanceof Error ? e.message : String(e));
+      })
+      .finally(() => {
+        if (!cancelled) setAiLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeAction, text, aiRetryNonce]);
+
+  // Window-level keyboard: Enter → Apply, Escape → Close. Enter is ignored while a button inside the card
+  // is focused so it can't hijack ReviewPanel's accept-a-suggestion buttons.
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Enter") {
+        if ((event.target as HTMLElement)?.tagName === "BUTTON") return;
+        if (aiLoading) return; // don't apply mid-transform (result isn't ready)
+        event.preventDefault();
+        void handleApply();
+      } else if (event.key === "Escape") {
+        event.preventDefault();
+        void handleClose();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [handleApply, handleClose, aiLoading]);
+
+  // Size the window to the card's content so it doesn't cover more of the screen than it needs (a fixed
+  // 420x340 box left a lot of dead space and obscured text). Capped at CARD_MAX_HEIGHT; the body scrolls
+  // beyond that. Runs on every content change via ResizeObserver.
+  useEffect(() => {
+    const el = cardRef.current;
+    if (!el) return;
+    const win = getCurrentWebviewWindow();
+    const fit = () => {
+      const h = Math.min(
+        Math.max(Math.ceil(el.scrollHeight), CARD_MIN_HEIGHT),
+        CARD_MAX_HEIGHT,
+      );
+      void win.setSize(new LogicalSize(CARD_WIDTH, h)).catch(() => {});
+    };
+    const ro = new ResizeObserver(fit);
+    ro.observe(el);
+    fit();
+    return () => ro.disconnect();
+  }, []);
+
+  // NOTE: the card intentionally does NOT dismiss on click-away. It's a normal (not always-on-top) movable
+  // window that persists until Close/Apply/Esc, so you can click into other windows to reference things
+  // without losing it. If it slips behind other windows, pressing the review hotkey again raises it back to
+  // the front (handled backend-side in ReviewSelectionAction) rather than opening a second card.
+
+  const aiHint = t(
+    "settings.review.aiHint",
+    "Configure AI in Settings → Cleanup",
+  );
+
+  const chipLabel = (action: ReviewAction): string => {
+    switch (action) {
+      case "proofread":
+        return t("settings.review.chip.proofread", "Proofread");
+      case "rewrite":
+        return t("settings.review.chip.rewrite", "Rewrite");
+      case "formal":
+        return t("settings.review.chip.formal", "Formal");
+      case "summarize":
+        return t("settings.review.chip.summarize", "Summarize");
+    }
+  };
+
+  const renderChip = (action: ReviewAction) => {
+    const enabled = chipEnabled(action, aiAvailable);
+    const active = activeAction === action;
+    return (
+      <button
+        key={action}
+        type="button"
+        disabled={!enabled}
+        title={enabled ? undefined : aiHint}
+        onClick={() => enabled && setActiveAction(action)}
+        className={[
+          "rounded-full px-3 py-1 text-xs font-medium transition-colors",
+          active
+            ? "bg-accent text-white"
+            : "bg-inset text-muted hover:text-text",
+          enabled ? "cursor-pointer" : "cursor-not-allowed opacity-40",
+        ].join(" ")}
+      >
+        {chipLabel(action)}
+      </button>
+    );
+  };
+
+  return (
+    <div
+      ref={cardRef}
+      className="font-sans flex w-screen flex-col overflow-hidden rounded-xl border border-hairline-strong bg-panel text-text"
+    >
+      {/* Drag handle — grab here to move the card. Interactive children below aren't drag regions, so they
+          still click normally. */}
+      <div
+        data-tauri-drag-region
+        className="flex cursor-move items-center justify-between border-b border-hairline px-3 py-1.5 select-none"
+      >
+        <span
+          data-tauri-drag-region
+          className="text-[11px] font-medium tracking-wide text-muted"
+        >
+          {t("settings.review.title", "Review")}
+        </span>
+      </div>
+
+      {/* Chip row */}
+      <div className="flex flex-wrap items-center gap-1.5 border-b border-hairline px-3 pt-2.5 pb-2.5">
+        {renderChip("proofread")}
+        {AI_ACTIONS.map(renderChip)}
+      </div>
+
+      {/* Body — grows with content up to CARD_MAX_HEIGHT, then scrolls internally. The cap is derived from
+          CARD_MAX_HEIGHT (minus the chrome height) so it stays in lockstep with the window sizing. */}
+      <div
+        className="overflow-y-auto px-3 py-3 text-sm"
+        style={{ maxHeight: CARD_BODY_MAX_HEIGHT }}
+      >
+        {activeAction === "proofread" ? (
+          <ReviewPanel text={text} onResult={setReviewResult} />
+        ) : aiLoading ? (
+          <div className="flex items-center justify-center gap-2 rounded-lg border border-hairline bg-panel px-3 py-6 text-sm text-muted">
+            <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-hairline-strong border-t-accent" />
+            {t("settings.review.working", "Working…")}
+          </div>
+        ) : aiError ? (
+          <div className="space-y-2 rounded-lg border border-hairline bg-panel px-3 py-3 text-sm">
+            <div className="text-red-500">{aiError}</div>
+            <button
+              type="button"
+              onClick={() => setAiRetryNonce((n) => n + 1)}
+              className="rounded-md border border-hairline-strong px-2.5 py-1 text-xs font-medium text-text hover:bg-inset"
+            >
+              {t("settings.review.retry", "Retry")}
+            </button>
+          </div>
+        ) : aiEmpty ? (
+          <div className="rounded-lg border border-hairline bg-panel px-3 py-6 text-center text-sm text-muted">
+            {t("settings.review.nothingToTransform", "Nothing to transform.")}
+          </div>
+        ) : (
+          <div className="space-y-2.5">
+            <div>
+              <div className="mb-1 text-[10px] font-medium tracking-wide text-faint uppercase">
+                {t("settings.review.before", "Before")}
+              </div>
+              <div className="rounded-lg border border-hairline bg-panel px-3 py-2 text-sm whitespace-pre-wrap text-muted">
+                {text}
+              </div>
+            </div>
+            <div>
+              <div className="mb-1 text-[10px] font-medium tracking-wide text-faint uppercase">
+                {t("settings.review.after", "After")}
+              </div>
+              <div className="rounded-lg border border-hairline-strong bg-panel px-3 py-2 text-sm whitespace-pre-wrap text-text">
+                {aiResult}
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Inline Apply/Copy failure — surfaced here rather than silently closing/doing nothing. */}
+      {actionError && (
+        <div className="border-t border-hairline px-3 py-2 text-xs text-red-500">
+          {actionError}
+        </div>
+      )}
+
+      {/* Footer */}
+      <div className="flex items-center justify-end gap-2 border-t border-hairline px-3 py-2.5">
+        <button
+          type="button"
+          onClick={() => void handleClose()}
+          className="rounded-md px-3 py-1.5 text-xs font-medium text-muted hover:text-text"
+        >
+          {t("settings.review.close", "Close")}
+        </button>
+        <button
+          type="button"
+          onClick={() => void handleCopy()}
+          disabled={aiLoading}
+          className="rounded-md border border-hairline-strong px-3 py-1.5 text-xs font-medium text-text hover:bg-inset disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          {t("settings.review.copy", "Copy")}
+        </button>
+        <button
+          type="button"
+          onClick={() => void handleApply()}
+          disabled={aiLoading}
+          className="rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-white hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          {t("settings.review.apply", "Apply")}
+        </button>
+      </div>
+    </div>
+  );
+};
+
+export default ReviewOverlay;

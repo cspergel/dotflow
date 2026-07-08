@@ -94,7 +94,38 @@ suggestions }>`. `Suggestion::apply(span, &mut Vec<char>)`. Spans are CHAR offse
 - The **empty‑key `.` trigger bug** (fixed): alias‑only phrases have `key=""` → `.{key}`==`.` matched every
   period. `PhraseTable::new` drops empty keys.
 
-## IN PROGRESS — the next task: selection hotkey → floating review overlay
+## ✅ DONE on branch `feat/selection-review-overlay` (2026-07-08 — not yet merged to main)
+
+The selection→review overlay AND a local-AI backend are built, code-reviewed, and verified live on Win11
+(25 commits, all builds green, 188 tests). See `docs/plans/2026-07-07-selection-review-overlay-{design,implementation}.md`.
+
+- **Selection → review overlay:** hotkey `Ctrl+Shift+J` grabs the selection → a **draggable, content-sized,
+  click-away-dismiss** card near the cursor → offline **Proofread** (Harper, via `ReviewPanel`) + **AI chips**
+  (Rewrite/Formal/Summarize) → Apply pastes back (single Ctrl+Z reverts). Key files: `overlay.rs`
+  (`create/show/hide_review_overlay`), `actions.rs` (`ReviewSelectionAction`, `copy_selection`),
+  `commands/cleanup.rs` (`apply_review_result`/`cancel_review`/`get_pending_review`),
+  `src/overlay/review/ReviewOverlay.tsx`, `capabilities/default.json` (the window must be listed there).
+- **Local offline AI (`local-llm` cargo feature, default OFF):** `llama-cpp-2` runs GGUF models on CPU
+  (`dotflow/local_llm.rs`, model cached). `ai_transform` routes cloud/Ollama → local → error. **Model picker**
+  in Settings→Cleanup (`dotflow/llm_catalog.rs`, `commands/llm.rs`, `LlmModelPicker.tsx`): download/select/
+  cancel/delete; **Gemma 4 E2B (Apache-2.0) recommended default**. Models in `%APPDATA%/…/models/llm/`.
+  Feature build needs libclang + cmake (see the gotchas below / cross-session memory).
+- **Nemotron ASR streaming** surfaced in the STT picker (allowlist add in `managers/model.rs`).
+
+**Left:** live acceptance test (F1 clipboard-preservation + AI round-trip), decide merge-to-main, macOS/Linux
+local-llm (Win-x86_64 only), a few Minor polish items.
+
+### Gotchas added this branch
+- **Phantom-Alt:** `input::release_modifiers` only releases modifiers actually held (GetAsyncKeyState) — a
+  spurious Alt-up flips WinUI apps into Alt-menu mode and eats the synthetic Ctrl+C.
+- **Feature build env:** `export LIBCLANG_PATH="C:/Users/drcra/anaconda3/Lib/site-packages/clang/native"` +
+  VS 2022 CMake on PATH; `cargo build --bin dotflow --features local-llm`.
+- **Tauri v2 capabilities:** a new window must be in `capabilities/default.json` `windows[]` or its frontend
+  window calls (startDragging, setSize) are silently denied.
+
+---
+
+## (superseded) original sketch — selection hotkey → floating review overlay
 
 **Goal (agreed):** a 2nd hotkey grabs the current selection (or whole field) → a small **always‑on‑top
 DotFlow window pops near the cursor** showing the **review panel** → user accepts fixes → pastes back. This is

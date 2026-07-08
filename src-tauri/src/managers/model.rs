@@ -23,16 +23,18 @@ use tar::Archive;
 use tauri::{AppHandle, Emitter, Manager};
 
 /// DotFlow: the curated model picker — the only catalog models we surface (plus anything the user has
-/// downloaded or added, see `get_available_models`). Parakeet V3/V2 are the streaming core (the Dragon-feel
-/// field streaming + typed expander require a streaming model); Whisper Small/Turbo/Large-v3 are the CPU
-/// batch options; the Moonshine V2 streaming trio is a lightweight English-only streaming alternative. All
-/// are GGUF (transcribe-cpp, CPU) — matching DotFlow's default (`parakeet-tdt-0.6b-v3-gguf`).
+/// downloaded or added, see `get_available_models`). Parakeet V3/V2 and Nemotron Streaming 3.5 are the
+/// streaming core (the Dragon-feel field streaming + typed expander require a streaming model — Nemotron
+/// adds multilingual streaming across 28 languages); Whisper Small/Turbo/Large-v3 are the CPU batch
+/// options; the Moonshine V2 streaming trio is a lightweight English-only streaming alternative. All are
+/// GGUF (transcribe-cpp, CPU) — matching DotFlow's default (`parakeet-tdt-0.6b-v3-gguf`).
 ///
 /// These are the HF **repo ids**. A registry entry's id is `"{repo_id}/{filename}"` (see
 /// `catalog::ModelDescriptor::from`), so we match by repo-id prefix, not exact equality.
 const DOTFLOW_MODEL_REPOS: &[&str] = &[
     "handy-computer/parakeet-tdt-0.6b-v3-gguf",
     "handy-computer/parakeet-tdt-0.6b-v2-gguf",
+    "handy-computer/nemotron-3.5-asr-streaming-0.6b-gguf",
     "handy-computer/whisper-small-gguf",
     "handy-computer/whisper-large-v3-turbo-gguf",
     "handy-computer/whisper-large-v3-gguf",
@@ -1119,9 +1121,10 @@ impl ModelManager {
         };
         // DotFlow: trim the picker to the models that fit our CPU / streaming setup — the Parakeet streaming
         // core (the Dragon feel + typed expander need a streaming model), a Whisper CPU batch trio, and the
-        // Moonshine V2 English-streaming family. Handy's wider catalog (Canary, Cohere, Voxtral, Qwen, Granite,
-        // GigaAM, SenseVoice, Nemotron, Fun-ASR, foreign-language and legacy Whisper variants, …) is hidden to
-        // keep the list focused. Anything the user has actually downloaded or added stays visible regardless.
+        // Moonshine V2 English-streaming family, plus Nemotron Streaming 3.5 (multilingual streaming). Handy's
+        // wider catalog (Canary, Cohere, Voxtral, Qwen, Granite, GigaAM, SenseVoice, Fun-ASR, foreign-language
+        // and legacy Whisper variants, …) is hidden to keep the list focused. Anything the user has actually
+        // downloaded or added stays visible regardless.
         list.retain(|m| is_dotflow_curated(&m.id) || m.is_downloaded || m.is_custom);
         // Stable, reasonable order: catalog editorial rank first (lower = higher
         // priority), then any other recommended model, then by accuracy, speed,

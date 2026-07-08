@@ -397,6 +397,11 @@ fn register_all_shortcuts_for_implementation(
             continue;
         }
 
+        // Skip the selection-review shortcut when the feature is disabled
+        if id == "review_selection" && !current_settings.selection_review_enabled {
+            continue;
+        }
+
         let mut binding = current_settings
             .bindings
             .get(id)
@@ -879,6 +884,28 @@ pub fn change_post_process_enabled_setting(app: AppHandle, enabled: bool) -> Res
         .get("transcribe_with_post_process")
         .cloned()
     {
+        if enabled {
+            let _ = register_shortcut(&app, binding);
+        } else {
+            let _ = unregister_shortcut(&app, binding);
+        }
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn change_selection_review_enabled_setting(
+    app: AppHandle,
+    enabled: bool,
+) -> Result<(), String> {
+    let mut settings = settings::get_settings(&app);
+    settings.selection_review_enabled = enabled;
+    settings::write_settings(&app, settings.clone());
+
+    // Register or unregister the selection-review shortcut
+    if let Some(binding) = settings.bindings.get("review_selection").cloned() {
         if enabled {
             let _ = register_shortcut(&app, binding);
         } else {

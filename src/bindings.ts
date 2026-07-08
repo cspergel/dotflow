@@ -351,6 +351,14 @@ async changeTypedExpanderSoundSetting(enabled: boolean) : Promise<Result<null, s
     else return { status: "error", error: e  as any };
 }
 },
+async changeSelectionReviewEnabledSetting(enabled: boolean) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("change_selection_review_enabled_setting", { enabled }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 async previewCleanup(text: string) : Promise<Result<string, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("preview_cleanup", { text }) };
@@ -364,6 +372,66 @@ async analyzeText(text: string) : Promise<TextSuggestion[]> {
 },
 async postProcessIsConfigured() : Promise<boolean> {
     return await TAURI_INVOKE("post_process_is_configured");
+},
+async applyReviewResult(text: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("apply_review_result", { text }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async cancelReview() : Promise<null> {
+    return await TAURI_INVOKE("cancel_review");
+},
+async getPendingReview() : Promise<[string, boolean] | null> {
+    return await TAURI_INVOKE("get_pending_review");
+},
+async aiTransform(text: string, action: string) : Promise<Result<string, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("ai_transform", { text, action }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async aiTransformAvailable() : Promise<boolean> {
+    return await TAURI_INVOKE("ai_transform_available");
+},
+async listLlmModels() : Promise<LlmModelInfo[]> {
+    return await TAURI_INVOKE("list_llm_models");
+},
+async downloadLlmModel(id: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("download_llm_model", { id }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async cancelLlmDownload(id: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("cancel_llm_download", { id }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async selectLlmModel(id: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("select_llm_model", { id }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async deleteLlmModel(id: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("delete_llm_model", { id }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
 },
 async changeAppLanguageSetting(language: string) : Promise<Result<null, string>> {
     try {
@@ -962,13 +1030,20 @@ field_stream_char_delay_ms?: number;
  * monitor watches what you type and expands your dot-triggers (`.fu`) in ANY app — the same phrase
  * library that powers spoken triggers. Off by default; it monitors typing, so it is strictly opt-in.
  */
-experimental_typed_expander?: boolean; typed_expander_sound?: boolean; clipboard_handling?: ClipboardHandling; auto_submit?: boolean; auto_submit_key?: AutoSubmitKey; post_process_enabled?: boolean; post_process_provider_id?: string; post_process_providers?: PostProcessProvider[]; post_process_api_keys?: SecretMap; post_process_models?: Partial<{ [key in string]: string }>; post_process_prompts?: LLMPrompt[]; post_process_selected_prompt_id?: string | null; mute_while_recording?: boolean; append_trailing_space?: boolean; app_language?: string; experimental_enabled?: boolean; lazy_stream_close?: boolean; keyboard_implementation?: KeyboardImplementation; show_tray_icon?: boolean; paste_delay_ms?: number; typing_tool?: TypingTool; external_script_path: string | null; custom_filler_words?: string[] | null; transcribe_accelerator?: TranscribeAcceleratorSetting; ort_accelerator?: OrtAcceleratorSetting; transcribe_gpu_device?: number; extra_recording_buffer_ms?: number; vad_enabled?: boolean; 
+experimental_typed_expander?: boolean; typed_expander_sound?: boolean; clipboard_handling?: ClipboardHandling; auto_submit?: boolean; auto_submit_key?: AutoSubmitKey; selection_review_enabled?: boolean; post_process_enabled?: boolean; post_process_provider_id?: string; post_process_providers?: PostProcessProvider[]; post_process_api_keys?: SecretMap; post_process_models?: Partial<{ [key in string]: string }>; post_process_prompts?: LLMPrompt[]; post_process_selected_prompt_id?: string | null; mute_while_recording?: boolean; append_trailing_space?: boolean; app_language?: string; experimental_enabled?: boolean; lazy_stream_close?: boolean; keyboard_implementation?: KeyboardImplementation; show_tray_icon?: boolean; paste_delay_ms?: number; typing_tool?: TypingTool; external_script_path: string | null; custom_filler_words?: string[] | null; transcribe_accelerator?: TranscribeAcceleratorSetting; ort_accelerator?: OrtAcceleratorSetting; transcribe_gpu_device?: number; extra_recording_buffer_ms?: number; vad_enabled?: boolean; 
 /**
  * Which recording overlay to show: None / Minimal / Live. Streaming mode is
  * not gated on this — that follows model capability. Migrated from the old
  * `overlay_position` (position `none` → style `None`).
  */
-overlay_style?: OverlayStyle }
+overlay_style?: OverlayStyle;
+/**
+ * DotFlow: absolute path to a local GGUF instruct model used for the offline "AI transform" actions
+ * (the review overlay's Rewrite / Formal / Summarize chips) when no cloud/Ollama post-processor is
+ * configured. Empty = no local model set (the AI chips then require a cloud backend). Only consulted
+ * in builds compiled with the `local-llm` feature. Set via the store; no in-app editor yet.
+ */
+local_llm_model_path?: string }
 export type AudioDevice = { index: string; name: string; is_default: boolean }
 export type AutoSubmitKey = "enter" | "ctrl_enter" | "cmd_enter"
 export type AvailableAccelerators = { transcribe: string[]; ort: string[]; gpu_devices: GpuDeviceOption[] }
@@ -995,6 +1070,10 @@ export type ImplementationChangeResult = { success: boolean;
 reset_bindings: string[] }
 export type KeyboardImplementation = "tauri" | "handy_keys"
 export type LLMPrompt = { id: string; name: string; prompt: string }
+/**
+ * One curated local LLM the user can download to power the AI-transform actions.
+ */
+export type LlmModelInfo = { id: string; name: string; params: string; size_bytes: number; license: string; commercial_ok: boolean; recommended: boolean; note: string; url: string; filename: string; downloaded: boolean; active: boolean }
 export type LogLevel = "trace" | "debug" | "info" | "warn" | "error"
 export type ModelInfo = { id: string; name: string; description: string; filename: string; source: ModelSource; size_mb: number; is_downloaded: boolean; is_downloading: boolean; partial_size: number; is_directory: boolean; engine_type: EngineType; accuracy_score: number; speed_score: number; supports_translation: boolean; is_recommended: boolean; supported_languages: string[]; supports_language_selection: boolean; is_custom: boolean; supports_streaming: boolean; supports_language_detection: boolean }
 export type ModelLoadStatus = { is_loaded: boolean; current_model: string | null }

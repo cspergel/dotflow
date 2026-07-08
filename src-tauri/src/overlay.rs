@@ -458,6 +458,170 @@ pub fn hide_recording_overlay(app_handle: &AppHandle) {
     }
 }
 
+// --- Selection-review overlay ---------------------------------------------------------------------
+//
+// A focusable, always-on-top card shown at the cursor. Unlike the recording overlay (which splits into
+// an NSPanel on macOS), the review card takes keyboard focus, so one plain `WebviewWindowBuilder` is
+// correct on every platform (macOS NSPanel polish deferred).
+
+pub const REVIEW_WIDTH: f64 = 420.0;
+pub const REVIEW_HEIGHT: f64 = 340.0;
+
+/// Creates the selection-review overlay window and keeps it hidden by default.
+pub fn create_review_overlay(app_handle: &AppHandle) {
+    let mut builder = tauri::WebviewWindowBuilder::new(
+        app_handle,
+        "review_overlay",
+        tauri::WebviewUrl::App("src/overlay/review/index.html".into()),
+    )
+    .title("Review")
+    .resizable(false)
+    .inner_size(REVIEW_WIDTH, REVIEW_HEIGHT)
+    .shadow(false)
+    .maximizable(false)
+    .minimizable(false)
+    .closable(false)
+    .decorations(false)
+    // NOT always-on-top: the card shows focused (force_foreground below) so it's on top while in use,
+    // but must not force itself in front of everything once the user moves on — clicking away dismisses
+    // it (onFocusChanged in ReviewOverlay.tsx). always_on_top read as obtrusive ("in front no matter what").
+    .skip_taskbar(true)
+    .transparent(true)
+    .focusable(true) // KEY difference vs the recording overlay: the card takes keyboard focus.
+    .visible(false);
+
+    if let Some(data_dir) = crate::portable::data_dir() {
+        builder = builder.data_directory(data_dir.join("webview"));
+    }
+
+    if let Err(e) = builder.build() {
+        log::error!("Failed to create review overlay window: {}", e);
+    } else {
+        log::debug!("Review overlay window created successfully (hidden)");
+    }
+}
+
+/// Positions the review card below-right of the cursor, stores its payload, shows it, and
+/// force-foregrounds it so keyboard navigation works without a click. `text` is the selected text;
+/// `ai_available` gates the AI action chips. [F8] one signature — the work area is computed inside.
+pub fn show_review_overlay(
+    app_handle: &AppHandle,
+    text: &str,
+    ai_available: bool,
+) -> Result<(), String> {
+    let win = app_handle
+        .get_webview_window("review_overlay")
+        .ok_or("review overlay window missing")?;
+
+    // [F6] enigo's cursor and Tauri's Monitor bounds are PHYSICAL px; the recording overlay divides both
+    // by the monitor's scale_factor to reach logical space (see get_monitor_with_cursor /
+    // calculate_overlay_position above). Do the same so the pure clamp + LogicalPosition all agree.
+    let monitor = get_monitor_with_cursor(app_handle);
+    let scale = monitor.as_ref().map(|m| m.scale_factor()).unwrap_or(1.0);
+    let (pcx, pcy) = input::get_cursor_position(app_handle).unwrap_or((0, 0));
+    // On macOS enigo returns LOGICAL points already (see get_monitor_with_cursor above), so we use the
+    // cursor coordinates directly — dividing by scale again would double-divide and misplace the card on
+    // Retina displays. Only the cursor is affected; the monitor bounds below are physical on both
+    // platforms and are correctly divided.
+    #[cfg(target_os = "macos")]
+    let cursor = (pcx as f64, pcy as f64);
+    // Dividing by scale is correct ONLY because the Windows app is PerMonitorV2 DPI-aware, so enigo's
+    // get_cursor_position returns PHYSICAL px. If that awareness ever regressed, enigo would start
+    // returning logical px and this would double-divide (mirrors the macOS branch's hazard, inverted).
+    #[cfg(not(target_os = "macos"))]
+    let cursor = (pcx as f64 / scale, pcy as f64 / scale);
+
+    let work = match monitor.as_ref() {
+        Some(m) => crate::dotflow::overlay_pos::WorkArea {
+            x: m.position().x as f64 / scale,
+            y: m.position().y as f64 / scale,
+            width: m.size().width as f64 / scale,
+            height: m.size().height as f64 / scale,
+        },
+        None => crate::dotflow::overlay_pos::WorkArea {
+            x: 0.0,
+            y: 0.0,
+            width: REVIEW_WIDTH,
+            height: REVIEW_HEIGHT,
+        },
+    };
+
+    let (x, y) = crate::dotflow::overlay_pos::clamp_overlay_position(
+        cursor,
+        (REVIEW_WIDTH, REVIEW_HEIGHT),
+        work,
+    );
+
+    log::info!(
+        "show_review_overlay: cursor=({pcx},{pcy}) scale={scale} -> logical card at ({x:.0},{y:.0}); {} chars",
+        text.chars().count()
+    );
+
+    let _ = win.set_size(tauri::Size::Logical(tauri::LogicalSize {
+        width: REVIEW_WIDTH,
+        height: REVIEW_HEIGHT,
+    }));
+    let _ = win.set_position(tauri::Position::Logical(tauri::LogicalPosition { x, y }));
+
+    // [F11] persist the payload so a late-mounting webview can PULL it (the emit below can fire before
+    // the listener is registered).
+    if let Some(state) = app_handle.try_state::<crate::ReviewContext>() {
+        if let Ok(mut c) = state.0.lock() {
+            if let Some(ctx) = c.as_mut() {
+                ctx.payload = Some((text.to_string(), ai_available));
+            }
+        }
+    }
+
+    let _ = win.show();
+
+    // [F2] the default HandyKeys backend confers NO activation rights; force our card to the foreground
+    // so Enter/Esc/arrows work without a click.
+    #[cfg(target_os = "windows")]
+    if let Ok(hwnd) = win.hwnd() {
+        // NOTE: this runs off the UI/window-owning thread (show_review_overlay is called from a spawned
+        // worker), which is a known reliability caveat for the AttachThreadInput dance inside
+        // force_foreground — to be validated in the Task A11 "keyboard-first without a click" exercise.
+        let ok = crate::input::force_foreground(hwnd.0 as isize);
+        log::info!("show_review_overlay: force_foreground -> {ok}; window shown");
+    }
+    let _ = win.set_focus();
+
+    // Fast path when the listener is already up (the PULL above covers the race the other way).
+    let _ = app_handle.emit_to(
+        "review_overlay",
+        "review-text",
+        serde_json::json!({ "text": text, "ai_available": ai_available }),
+    );
+
+    Ok(())
+}
+
+/// Hides the review card. [F13] SYNCHRONOUS hide (unlike `hide_recording_overlay`'s 300ms deferred
+/// fade) so the always-on-top card is gone before the apply path refocuses the source and pastes.
+/// Clears the re-entrancy guard [F9] and emits `review-hide` for the UI.
+pub fn hide_review_overlay(app_handle: &AppHandle) {
+    if let Some(win) = app_handle.get_webview_window("review_overlay") {
+        let _ = win.hide();
+        let _ = win.emit("review-hide", ());
+    }
+    crate::REVIEW_OPEN.store(false, Ordering::SeqCst);
+}
+
+/// Bring the review card back to the front. The card is NOT always-on-top, so it can slip behind other
+/// windows; re-pressing the review hotkey while it's already open calls this to resurface it (rather than a
+/// no-op or a second card). Does not touch the stashed context/selection.
+pub fn raise_review_overlay(app_handle: &AppHandle) {
+    if let Some(win) = app_handle.get_webview_window("review_overlay") {
+        let _ = win.show();
+        #[cfg(target_os = "windows")]
+        if let Ok(hwnd) = win.hwnd() {
+            crate::input::force_foreground(hwnd.0 as isize);
+        }
+        let _ = win.set_focus();
+    }
+}
+
 // Cached "overlay is enabled" flag, kept in sync with overlay_style. Avoids
 // reading the Tauri store on every audio callback (~24 Hz during recording).
 // Defaults to false so the audio path doesn't emit until lib.rs::setup

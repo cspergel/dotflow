@@ -87,6 +87,32 @@ hf-hub = { git = "https://github.com/cjpais/hf-hub", branch = "cancellable-downl
   "tokio",
 ] }
 harper-core = "2.5.0"
+# Local offline LLM text generation (feature-gated, optional). Pinned to the version proved to
+# compile/link alongside transcribe-cpp's GGML on Windows. Kept out of default/CI builds.
+llama-cpp-2 = { version = "=0.1.151", optional = true }
+
+[features]
+# Keeps llama-cpp-2 (and the local_llm module) out of default/CI builds.
+local-llm = ["dep:llama-cpp-2"]
+# Internal cfg flag: local_llm.rs reads `cfg!(feature = "cuda")` to offload LLM
+# layers to the GPU. Not meant to be enabled directly — use `local-llm-cuda`.
+cuda = []
+# Opt-in NVIDIA GPU acceleration for the local LLM. Additive over the CPU build:
+# pulls in llama-cpp-2's CUDA backend and flips local_llm.rs to GPU offload.
+# The shipping/default build stays CPU-only (`local-llm`).
+local-llm-cuda = ["local-llm", "cuda", "llama-cpp-2/cuda"]
+
+[[example]]
+name = "llama_smoke"
+required-features = ["local-llm"]
+
+[[example]]
+name = "llama_generate"
+required-features = ["local-llm"]
+
+[[example]]
+name = "ai_transform_smoke"
+required-features = ["local-llm"]
 
 [target.'cfg(unix)'.dependencies]
 signal-hook = "0.3"

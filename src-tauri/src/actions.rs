@@ -909,6 +909,28 @@ async fn cleanup_with_llm(settings: &AppSettings, input: &str) -> Option<String>
     post_process_transcription(&s, input).await
 }
 
+/// Run the currently-configured post-process LLM over `input` with an arbitrary per-action `system_prompt`
+/// (the review overlay's Rewrite / Formal / Summarize actions). Like [`cleanup_with_llm`] it reuses the
+/// proven `post_process_transcription` plumbing via a settings CLONE, so the dictation post-process path is
+/// untouched. The `${output}` suffix is what the legacy (non-structured-output) providers substitute the
+/// text into; the structured-output path strips it and sends `input` as the user message. Returns `None`
+/// when no provider/model/prompt is configured or the call yields nothing.
+pub(crate) async fn ai_transform_with_llm(
+    settings: &AppSettings,
+    system_prompt: &str,
+    input: &str,
+) -> Option<String> {
+    let mut s = settings.clone();
+    let id = "__dotflow_ai_transform__".to_string();
+    s.post_process_prompts.push(crate::settings::LLMPrompt {
+        id: id.clone(),
+        name: "AI transform".to_string(),
+        prompt: format!("{system_prompt}\n\n${{output}}"),
+    });
+    s.post_process_selected_prompt_id = Some(id);
+    post_process_transcription(&s, input).await
+}
+
 /// Resolve the best available cleanup for `text`: the post-process LLM if one is configured (fuller
 /// grammar/spelling), otherwise the offline Harper grammar pass followed by the deterministic mechanical
 /// tidy. Shared by the cleanup hotkey and the in-app "Try it" preview so they behave identically.
@@ -924,10 +946,12 @@ pub(crate) async fn resolve_cleanup(settings: &AppSettings, text: &str) -> Strin
     }
 }
 
-/// The "clean up selected text" hotkey pipeline: copy the selection, run it through the post-process LLM
-/// with the cleanup prompt, paste the result over the selection, and restore the user's original clipboard.
-/// The synchronous clipboard/keystroke work runs on a blocking thread; only the LLM call is awaited.
-async fn cleanup_selection(app: &AppHandle) -> Result<(), String> {
+/// Copy the current selection using the wait-for-release + clipboard-sentinel dance, restoring the
+/// user's clipboard on the "nothing selected" path. Returns `(original_clipboard, selected_text)` or
+/// `None` when no selection was detected. Shared by the cleanup and review hotkeys.
+///
+/// The synchronous clipboard/keystroke work runs on a blocking thread.
+async fn copy_selection(app: &AppHandle) -> Result<Option<(String, String)>, String> {
     use tauri_plugin_clipboard_manager::ClipboardExt;
 
     // A near-impossible clipboard marker: we prime the clipboard with it, then watch for our synthetic Ctrl+C
@@ -956,7 +980,7 @@ async fn cleanup_selection(app: &AppHandle) -> Result<(), String> {
                     crate::input::release_modifiers(&mut enigo);
                     std::thread::sleep(std::time::Duration::from_millis(30));
                     if let Err(e) = crate::input::send_copy_ctrl_c(&mut enigo) {
-                        warn!("Cleanup hotkey: copy keystroke failed: {e}");
+                        warn!("Selection copy: copy keystroke failed: {e}");
                     }
                 }
             }
@@ -975,19 +999,43 @@ async fn cleanup_selection(app: &AppHandle) -> Result<(), String> {
         (original, selected)
     })
     .await
-    .map_err(|e| format!("cleanup copy task failed: {e}"))?;
+    .map_err(|e| format!("copy task failed: {e}"))?;
 
     // No selection: the copy never overwrote the sentinel. Restore and bail quietly.
     if selected.trim().is_empty() || selected == SENTINEL {
-        debug!("Cleanup hotkey: no selection detected — nothing to do");
+        // [DIAG] Distinguish "synthetic Ctrl+C never landed" (sentinel survived — e.g. the app entered
+        // menu/KeyTip mode and ate the keystroke) from a genuinely empty selection.
+        let reason = if selected == SENTINEL {
+            "sentinel SURVIVED — synthetic Ctrl+C never landed (app in menu/keytip mode?)"
+        } else {
+            "copy landed but selection was empty"
+        };
+        log::info!("copy_selection: no usable selection ({reason})");
         let app_c = app.clone();
         let orig = original.clone();
         let _ = tauri::async_runtime::spawn_blocking(move || {
             let _ = app_c.clipboard().write_text(&orig);
         })
         .await;
-        return Ok(());
+        return Ok(None);
     }
+
+    log::info!(
+        "copy_selection: captured {} chars",
+        selected.chars().count()
+    );
+    Ok(Some((original, selected)))
+}
+
+/// The "clean up selected text" hotkey pipeline: copy the selection, run it through the post-process LLM
+/// with the cleanup prompt, paste the result over the selection, and restore the user's original clipboard.
+/// The synchronous clipboard/keystroke work runs on a blocking thread; only the LLM call is awaited.
+async fn cleanup_selection(app: &AppHandle) -> Result<(), String> {
+    use tauri_plugin_clipboard_manager::ClipboardExt;
+
+    let Some((original, selected)) = copy_selection(app).await? else {
+        return Ok(());
+    };
 
     // Phase 2 (async): run the shared cleanup pipeline.
     let settings = get_settings(app);
@@ -1029,6 +1077,70 @@ impl ShortcutAction for CleanupSelectionAction {
     fn stop(&self, _app: &AppHandle, _binding_id: &str, _shortcut_str: &str) {}
 }
 
+// ---- Review selected text in a floating overlay (DotFlow) ----
+
+/// Copy the current selection, capture the source window, and open the floating review card near the
+/// cursor. Unlike `cleanup_selection`, the reviewed result is applied later (via `apply_review_result`)
+/// once the user picks a fix in the overlay — so this only captures context and shows the card.
+async fn review_selection(app: &AppHandle) -> Result<(), String> {
+    // Capture the field we came from BEFORE the synthetic copy can steal focus.
+    let source_hwnd = crate::input::get_foreground_window();
+
+    // Shared copy phase; `original` is kept so apply/cancel can restore the user's clipboard [F1].
+    let Some((original, selected)) = copy_selection(app).await? else {
+        // Nothing selected — copy_selection already restored the clipboard. Re-arm the hotkey [F9].
+        crate::REVIEW_OPEN.store(false, std::sync::atomic::Ordering::SeqCst);
+        return Ok(());
+    };
+
+    // Stash context so apply/cancel can refocus the right window and restore the clipboard.
+    if let Some(state) = app.try_state::<crate::ReviewContext>() {
+        if let Ok(mut c) = state.0.lock() {
+            // [F12] .ok()-style lock (`if let Ok`), never unwrap.
+            *c = Some(crate::ReviewCtx {
+                source_hwnd,
+                original_clipboard: original,
+                payload: None,
+            });
+        }
+    }
+
+    let ai_available = crate::commands::ai::ai_transform_available(app.clone());
+    crate::overlay::show_review_overlay(app, &selected, ai_available)?;
+    Ok(())
+}
+
+/// Review-selected-text hotkey action. One-shot on press: copies the selection and opens the overlay.
+struct ReviewSelectionAction;
+
+impl ShortcutAction for ReviewSelectionAction {
+    fn start(&self, app: &AppHandle, _binding_id: &str, _shortcut_str: &str) {
+        log::info!("Review-selection hotkey fired");
+        // [F9] Ignore a re-fire while the card is open; otherwise the 2nd fire would capture the overlay
+        // itself as the source window. Cleared in `hide_review_overlay` (apply/cancel) and on the paths
+        // below. Uses `swap` so the check-and-set is atomic.
+        if crate::REVIEW_OPEN.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            // Already open — bring the card back to the front instead of a no-op or a second card. Since it
+            // isn't always-on-top (it can slip behind other windows), re-pressing the hotkey is how the user
+            // resurfaces it. Does NOT re-copy a new selection; close it (Esc/Apply) to review something else.
+            log::info!("Review overlay already open — raising it to the front");
+            crate::overlay::raise_review_overlay(app);
+            return;
+        }
+        let app = app.clone();
+        tauri::async_runtime::spawn(async move {
+            if let Err(e) = review_selection(&app).await {
+                warn!("Review selection failed: {e}");
+                // Release the guard so a failed attempt re-arms the hotkey (the no-selection and success
+                // paths release it via the bail above / `hide_review_overlay` respectively).
+                crate::REVIEW_OPEN.store(false, std::sync::atomic::Ordering::SeqCst);
+            }
+        });
+    }
+
+    fn stop(&self, _app: &AppHandle, _binding_id: &str, _shortcut_str: &str) {}
+}
+
 // Static Action Map
 pub static ACTION_MAP: Lazy<HashMap<String, Arc<dyn ShortcutAction>>> = Lazy::new(|| {
     let mut map = HashMap::new();
@@ -1053,6 +1165,10 @@ pub static ACTION_MAP: Lazy<HashMap<String, Arc<dyn ShortcutAction>>> = Lazy::ne
     map.insert(
         "cleanup_selection".to_string(),
         Arc::new(CleanupSelectionAction) as Arc<dyn ShortcutAction>,
+    );
+    map.insert(
+        "review_selection".to_string(),
+        Arc::new(ReviewSelectionAction) as Arc<dyn ShortcutAction>,
     );
     map
 });
