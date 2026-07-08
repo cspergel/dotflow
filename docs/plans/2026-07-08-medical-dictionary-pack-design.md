@@ -1,7 +1,17 @@
 # Medical Dictionary Pack — design
 
-> Branch: `feat/review-enhancements`. Status: design (pre-implementation). Companion feature on the same
+> Branch: `feat/review-enhancements`. Status: design (post-sweep, folded). Companion feature on the same
 > branch: post-dictation review (separate design). Date: 2026-07-08.
+
+> **Sweep fold (2026-07-08).** A 3-lens adversarial sweep (`/sweep`) HALTED this design with 4 unrefuted
+> CRITICAL/HIGH findings; all are folded below and marked `[SWEEP-Fn]`. Headlines: (1) **feature was a
+> no-op** — must parse the Document with the merged dict, not only the linter (CRITICAL); (2) **casing
+> bypass** silently auto-applied medical terms — filter must be case-normalized (CRITICAL); (3) filter must
+> guard the **original** span, not only the replacement (HIGH); (4) a test used a non-existent method and
+> lacked feature-level teeth (HIGH). Verified-sound assumptions (do not re-litigate): `LintGroup::new_curated`
+> genuinely uses the passed dict (`lint_group/mod.rs:856`); `MergedDictionary` unions lookups;
+> `From<MutableDictionary> for FstDictionary` is cheap for ~5k terms; `DictWordMetadata::default()` passes the
+> dialect gate; injecting pack vocab does **not** degrade curated grammar linting.
 
 ## Goal
 
@@ -40,11 +50,21 @@ pub static PACKS: &[DictionaryPack] = &[DictionaryPack {
   compiled in via `include_str!`. No runtime file, no network.
 - Settings (`settings.rs`): add `enabled_dictionary_packs: Vec<String>`, default `[]` (opt-in, OFF).
 - Process-wide cached dictionary: `Mutex<Option<CachedDict>>` keyed on the sorted enabled-pack-id set.
-  `set_enabled_packs(&[String])` (called at startup + on every settings change) rebuilds once;
-  `current_dictionary() -> Arc<dyn Dictionary>` returns curated-only when nothing is enabled, else a
-  `MergedDictionary(curated + pack FST)`. Mirrors `local_llm.rs`'s `MODEL_CACHE`.
-- Flow: settings change → command updates store + calls `set_enabled_packs` → cache rebuilds →
-  `grammar::analyze` / `harper_cleanup` call `current_dictionary()` instead of `FstDictionary::curated()`.
+  `CachedDict` holds the `Arc<dyn Dictionary>` **and** the lowercase pack-term `HashSet` (used by the safety
+  filter — built once alongside the FST). `set_enabled_packs(&[String])` (called at startup + on every
+  settings change) rebuilds once; `current_dictionary() -> Arc<dyn Dictionary>` returns curated-only when
+  nothing is enabled, else a `MergedDictionary(curated + pack FST)`.
+- **[SWEEP-F7] Build outside the lock; degrade, never wedge.** `set_enabled_packs` builds the new
+  `FstDictionary` into a **local**, then takes the lock only to swap the `Arc` — so a concurrent
+  `current_dictionary()` never blocks for the FST build. If the build **panics or errors** (e.g. a malformed
+  pack term), fall back to **curated-only + log a warning** rather than leaving the cache `None`/poisoned —
+  because pack content is `include_str!`-fixed for the binary's life, a re-build-on-`None` would re-panic
+  every call and silently disable *all* linting. `current_dictionary()` on the read path **only clones the
+  cached `Arc`** — it never re-reads settings and never builds. Poison recovery (`.unwrap_or_else(|p|
+  p.into_inner())`, as in `local_llm.rs:112`) is replicated verbatim at every lock site.
+- Flow: settings change → command updates store + calls `set_enabled_packs` → cache rebuilds (build-then-swap)
+  → `grammar::analyze` / `harper_cleanup` snapshot `current_dictionary()` **once** at the top and use it for
+  **both** the linter (`LintGroup::new_curated`) **and** the Document parse (see [SWEEP-F1] in §2).
 
 ## Section 2 — Harper integration + acceptance-only safety filter
 
@@ -64,16 +84,36 @@ merged.add_dictionary(FstDictionary::curated());
 merged.add_dictionary(pack_dict);
 ```
 
-`noun_metadata()` = permissive noun-ish `DictWordMetadata` so terms count as real vocabulary. (Exact
-constructor confirmed against extracted harper-core 2.5.0 source at implementation time.)
+`noun_metadata()` = `DictWordMetadata::default()` (verified in the sweep: its empty `DialectFlags` passes the
+dialect gate, so terms count as valid vocabulary; no POS metadata is needed for spell suppression).
+
+**[SWEEP-F1] The load-bearing step — parse the Document with the merged dict.** Harper suppresses a Spelling
+lint only when the word carries `Some(metadata)`, and that metadata is assigned **at parse time** by the dict
+passed to `Document`. So swapping only the linter's dict is a **no-op**. Both `grammar::analyze` and
+`harper_cleanup` must replace `Document::new_plain_english_curated(text)` with
+`Document::new_plain_english(text, &dict)` using the *same* `current_dictionary()` value handed to
+`LintGroup::new_curated`. (Confirmed by harper's own `issue_1876` test, which routes the merged dict to both.)
+
+**[SWEEP-F3] Inflections.** `append_word_str` inserts only the exact surface form — no affix/plural expansion —
+so `metoprolol` is accepted but `metoprolols` / `metoprolol's` are not. v1: include common inflected forms
+directly in `medical.txt`; documented as a known limitation, not a silent gap.
 
 Two consumers, two behaviors — **this is the safety design**:
 
-- **`analyze` (Review panel, click-to-accept):** `current_dictionary()` as-is. Terms accepted; any medical
-  suggestion for a nearby typo is shown to the clinician, who chooses. Human-in-the-loop → safe to surface.
-- **`harper_cleanup` (silent auto-fix):** `current_dictionary()` for acceptance, **but drop any edit whose
-  replacement is a medical-pack term** before applying. A `HashSet<String>` of enabled-pack terms (built
-  with the FST) is the filter. Net: valid terms never flagged *and* no medical term silently inserted.
+- **`analyze` (Review panel, click-to-accept):** merged dict for both parse + lint. Terms accepted; any
+  medical suggestion for a nearby typo is shown to the clinician, who chooses. Human-in-the-loop → safe.
+- **`harper_cleanup` (silent auto-fix):** merged dict for acceptance, plus a **hardened drop filter** before
+  applying any edit. The filter drops an edit when **either** side is medical:
+  - **[SWEEP-F2, casing] Replacement side, case-normalized.** Drop if the replacement, **Unicode-lowercased**,
+    is in the lowercase pack-term set. (Harper mirrors the offending word's casing into its suggestion, so a
+    raw case-sensitive match misses `Metoprolol` at sentence start — the CRITICAL bypass.)
+  - **[SWEEP-F2b] Original side.** Drop if the **original span text**, lowercased, is an accepted pack term —
+    so a *valid* drug name can't be silently rewritten to a different word by a non-spell linter (the
+    replacement-only guard could never catch that).
+  - **[SWEEP-F4] All three `Suggestion` variants.** The filter is defined for `ReplaceWith` (check text),
+    `InsertAfter` (check inserted text), and `Remove` (check the original span) — not only `ReplaceWith`.
+  - Net: valid terms are never flagged, and no edit that inserts *or* overwrites a medical term is ever
+    applied silently. The human-reviewed `analyze` path keeps surfacing suggestions for the clinician.
 
 ## Section 3 — Commands, bindings & UI
 
@@ -97,17 +137,32 @@ set_dictionary_pack_enabled(app, id: String, enabled: bool) -> Result<(), String
 Each test asserts Harper's **real output**, checks **both states** (pack on/off), plus the safety boundary
 and a must-not-regress case.
 
-1. **Acceptance changes with the pack (both states).** A term in our list but NOT in curated Harper (e.g.
-   `metoprolol`): with no packs `analyze` flags it Spelling; with medical on the flag is gone. Identical
-   on/off output ⇒ merge did nothing ⇒ test fails.
-2. **Safety filter — medical never auto-applied (boundary + fail case).** A typo whose edit-distance
-   neighbor is a medical term: `harper_cleanup` with pack on leaves it **unchanged**; the same input in
-   `analyze` **does** surface the suggestion (proves the filter is path-specific, not a global no-op).
+1. **Acceptance changes with the pack (both states) — the feature-level teeth.** Choose a term confirmed
+   absent from curated Harper (`metoprolol`, `lisinopril`, `dyspnea` were verified absent in the sweep).
+   **[SWEEP-F-t1] Guard the premise in-test:** assert `FstDictionary::curated().contains_word_str(term)
+   == false` first, so a term drifting into curated (or dropped from the pack file) gives a clear diagnostic
+   instead of a confusing failure. Then: with no packs `analyze` flags it Spelling; with medical on the flag
+   is **gone**. This also covers [SWEEP-F1] — if the Document parse dict isn't swapped, the on-state still
+   flags and this test fails loudly. Parameterize over 2–3 confirmed-absent terms.
+2. **Safety filter — medical never auto-applied (boundary + fail case).** **[SWEEP-F2-test] Align the
+   cross-check to the *primary* suggestion:** pick a typo for which Harper ranks the medical term **first**
+   (since `harper_cleanup` only applies `suggestions.first()`), and assert in `analyze` that the medical term
+   is the **first** replacement for that span. Then `harper_cleanup` with pack on leaves it **unchanged**
+   (filter dropped it), while `analyze` **surfaces** it — proving the filter is path-specific, not a global
+   no-op. **Add a casing case (the CRITICAL):** a **sentence-initial** typo whose first suggestion is the
+   capitalized medical term (`Metoprolol`) must also be left unchanged by `harper_cleanup` — this fails if the
+   filter isn't case-normalized. **Add the original-side case:** a valid pack term that a non-spell linter
+   would rewrite must be left unchanged (guards [SWEEP-F2b]).
 3. **No regression (fail case).** Pack on: `harper_cleanup("This is an test.")` → `"This is a test."`;
    clean prose untouched. Proves the merge didn't break curated linting.
-4. **Registry drives the dict.** Enabled `["medical"]` → `current_dictionary().contains(term)` true;
-   enabled `[]` → false. Asserts on real `contains`, not a constructed value.
+4. **Registry drives the dict.** Enabled `["medical"]` → `current_dictionary().contains_word_str(term)`
+   **[SWEEP-F3] `contains_word_str`, not `contains` — the latter doesn't exist on the trait.** Enabled `[]`
+   → false. Narrow (wiring only) — it does **not** replace tests 1/2's feature-level teeth; keep all three.
+5. **[SWEEP-F4] Pack-file parser boundaries.** Comment line (`# heading`) must NOT become vocabulary
+   (assert a word from a comment is absent from `current_dictionary()`); trailing whitespace / blank lines
+   yield clean entries; duplicate term doesn't panic the FST build; **empty pack file** builds without panic
+   and behaves as pack-off; a term already in curated (`tachycardia`) doesn't double-flag or panic.
 
 **Verification before done:** `cargo test --lib` (new + existing 188), then live — toggle the pack in the
-running app and confirm a real clinical sentence stops underlining. Run `/verify` at the checkpoint so the
-referee carries the verdict.
+running app and confirm a real clinical sentence stops underlining **and** that a sentence-initial drug-name
+typo is not silently rewritten. Run `/verify` at the checkpoint so the referee carries the verdict.
