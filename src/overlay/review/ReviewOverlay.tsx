@@ -21,6 +21,11 @@ export type ReviewAction = "proofread" | "rewrite" | "formal" | "summarize";
 const CARD_WIDTH = 420;
 const CARD_MAX_HEIGHT = 480;
 const CARD_MIN_HEIGHT = 96;
+// Height of the non-scrolling chrome (title bar + chip row + footer). The scrolling body is capped at
+// CARD_MAX_HEIGHT minus this, so the body cap and the window's max height share one source of truth and
+// can't drift apart.
+const CARD_CHROME_HEIGHT = 120;
+const CARD_BODY_MAX_HEIGHT = CARD_MAX_HEIGHT - CARD_CHROME_HEIGHT;
 
 /**
  * Pure chip-gating predicate: Proofread is offline and always available; the AI actions
@@ -48,6 +53,10 @@ const ReviewOverlay: React.FC = () => {
   const [aiError, setAiError] = useState<string | null>(null);
   const [aiResult, setAiResult] = useState("");
   const [aiRetryNonce, setAiRetryNonce] = useState(0);
+  // True when an AI action ran against empty/whitespace-only text — surfaces a "nothing to transform"
+  // note instead of a silent no-op. `actionError` surfaces Apply/Copy failures inline in the card.
+  const [aiEmpty, setAiEmpty] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
   const cardRef = useRef<HTMLDivElement>(null);
   // Timestamp until which a focus-loss must NOT close the card. Starting a native window drag
   // (data-tauri-drag-region → startDragging) briefly blurs the window; without this grace window the
@@ -70,6 +79,8 @@ const ReviewOverlay: React.FC = () => {
       setAiResult("");
       setAiError(null);
       setAiLoading(false);
+      setAiEmpty(false);
+      setActionError(null);
     };
 
     const setup = async () => {
@@ -87,6 +98,8 @@ const ReviewOverlay: React.FC = () => {
         setAiResult("");
         setAiError(null);
         setAiLoading(false);
+        setAiEmpty(false);
+        setActionError(null);
       });
 
       if (cancelled) {
@@ -111,12 +124,32 @@ const ReviewOverlay: React.FC = () => {
   }, []);
 
   const handleApply = useCallback(async () => {
-    await commands.applyReviewResult(reviewResult || text);
+    setActionError(null);
+    try {
+      const res = await commands.applyReviewResult(reviewResult || text);
+      if (res.status === "error") {
+        setActionError(res.error);
+      }
+      // On success the backend closes the overlay; nothing more to do here.
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : String(e));
+    }
   }, [reviewResult, text]);
 
   const handleCopy = useCallback(async () => {
-    await navigator.clipboard.writeText(reviewResult || text);
-  }, [reviewResult, text]);
+    setActionError(null);
+    try {
+      await navigator.clipboard.writeText(reviewResult || text);
+    } catch (e) {
+      setActionError(
+        t(
+          "settings.review.copyFailed",
+          "Couldn't copy to clipboard: {{error}}",
+          { error: e instanceof Error ? e.message : String(e) },
+        ),
+      );
+    }
+  }, [reviewResult, text, t]);
 
   const handleClose = useCallback(async () => {
     await commands.cancelReview();
@@ -130,11 +163,21 @@ const ReviewOverlay: React.FC = () => {
       setAiLoading(false);
       setAiError(null);
       setAiResult("");
+      setAiEmpty(false);
       return;
     }
-    if (!text.trim()) return;
+    // Guard against transforming empty/whitespace-only text. Selection always has content in practice,
+    // but surface a short note instead of a silent early-return no-op.
+    if (!text.trim()) {
+      setAiLoading(false);
+      setAiError(null);
+      setAiResult("");
+      setAiEmpty(true);
+      return;
+    }
 
     let cancelled = false;
+    setAiEmpty(false);
     setAiLoading(true);
     setAiError(null);
     setAiResult("");
@@ -293,8 +336,12 @@ const ReviewOverlay: React.FC = () => {
         {AI_ACTIONS.map(renderChip)}
       </div>
 
-      {/* Body — grows with content up to CARD_MAX_HEIGHT, then scrolls internally. */}
-      <div className="max-h-[360px] overflow-y-auto px-3 py-3 text-sm">
+      {/* Body — grows with content up to CARD_MAX_HEIGHT, then scrolls internally. The cap is derived from
+          CARD_MAX_HEIGHT (minus the chrome height) so it stays in lockstep with the window sizing. */}
+      <div
+        className="overflow-y-auto px-3 py-3 text-sm"
+        style={{ maxHeight: CARD_BODY_MAX_HEIGHT }}
+      >
         {activeAction === "proofread" ? (
           <ReviewPanel text={text} onResult={setReviewResult} />
         ) : aiLoading ? (
@@ -312,6 +359,10 @@ const ReviewOverlay: React.FC = () => {
             >
               {t("settings.review.retry", "Retry")}
             </button>
+          </div>
+        ) : aiEmpty ? (
+          <div className="rounded-lg border border-hairline bg-panel px-3 py-6 text-center text-sm text-muted">
+            {t("settings.review.nothingToTransform", "Nothing to transform.")}
           </div>
         ) : (
           <div className="space-y-2.5">
@@ -334,6 +385,13 @@ const ReviewOverlay: React.FC = () => {
           </div>
         )}
       </div>
+
+      {/* Inline Apply/Copy failure — surfaced here rather than silently closing/doing nothing. */}
+      {actionError && (
+        <div className="border-t border-hairline px-3 py-2 text-xs text-red-500">
+          {actionError}
+        </div>
+      )}
 
       {/* Footer */}
       <div className="flex items-center justify-end gap-2 border-t border-hairline px-3 py-2.5">
