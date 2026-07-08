@@ -121,3 +121,12 @@ clutter. Every action below is a prompt behind that surface, not a new button.
 ## Later / backlog
 
 - Phone-as-microphone (LAN web page, QR pair, WebSocket audio → transcribe pipeline). Likely last.
+- **GPU CUDA runtime — auto-download on GPU-enable** (the product-grade delivery for GPU accel). Ship the
+  small CPU build; when a user turns on GPU acceleration, download NVIDIA's redistributable
+  (`cudart`/`cublas`/`cublasLt`, ~515 MB) into `%APPDATA%/…/cuda/`, verify, and add that dir to the DLL
+  search path so the app finds it at next launch — no 700 MB in the installer, no dependency on a
+  pre-installed CUDA Toolkit. Supersedes today's interim (dev machine: static-CUDA build that *locates* the
+  already-installed toolkit via a folder-local launcher — see `SESSION-HANDOFF.md`). Note: this does NOT slim
+  the exe itself (~122 MB from statically-linked CUDA kernels); that only shrinks with the parked
+  dynamic-`ggml-cuda.dll` approach, which is blocked by the whisper/llama `ggml-base.dll` collision (research
+  2026-07-08) and would need a separate CUDA helper process. Gate behind the same runtime GPU toggle.
