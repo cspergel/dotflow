@@ -608,6 +608,20 @@ pub fn hide_review_overlay(app_handle: &AppHandle) {
     crate::REVIEW_OPEN.store(false, Ordering::SeqCst);
 }
 
+/// Bring the review card back to the front. The card is NOT always-on-top, so it can slip behind other
+/// windows; re-pressing the review hotkey while it's already open calls this to resurface it (rather than a
+/// no-op or a second card). Does not touch the stashed context/selection.
+pub fn raise_review_overlay(app_handle: &AppHandle) {
+    if let Some(win) = app_handle.get_webview_window("review_overlay") {
+        let _ = win.show();
+        #[cfg(target_os = "windows")]
+        if let Ok(hwnd) = win.hwnd() {
+            crate::input::force_foreground(hwnd.0 as isize);
+        }
+        let _ = win.set_focus();
+    }
+}
+
 // Cached "overlay is enabled" flag, kept in sync with overlay_style. Avoids
 // reading the Tauri store on every audio callback (~24 Hz during recording).
 // Defaults to false so the audio path doesn't emit until lib.rs::setup

@@ -58,10 +58,6 @@ const ReviewOverlay: React.FC = () => {
   const [aiEmpty, setAiEmpty] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const cardRef = useRef<HTMLDivElement>(null);
-  // Timestamp until which a focus-loss must NOT close the card. Starting a native window drag
-  // (data-tauri-drag-region → startDragging) briefly blurs the window; without this grace window the
-  // click-away-dismiss effect would fire and close the card the instant you grab it to move it.
-  const suppressCloseUntilRef = useRef(0);
 
   // Listeners + pull-on-mount [F11]. The backend emits "review-text" immediately after show(), which can
   // race this effect's listener registration, so we also PULL the stored payload via getPendingReview();
@@ -245,26 +241,10 @@ const ReviewOverlay: React.FC = () => {
     return () => ro.disconnect();
   }, []);
 
-  // Click-away dismiss: when the card loses focus (user clicked another window/app), close it — so it's
-  // not "always in front no matter what". Guarded by `hadFocus` so the initial show (before force_foreground
-  // grants focus) can't self-close. Dragging/clicking chips stays within the window and doesn't blur it.
-  useEffect(() => {
-    const win = getCurrentWebviewWindow();
-    let hadFocus = false;
-    let unlisten: (() => void) | undefined;
-    void win
-      .onFocusChanged(({ payload: focused }) => {
-        if (focused) {
-          hadFocus = true;
-        } else if (hadFocus && Date.now() >= suppressCloseUntilRef.current) {
-          void commands.cancelReview();
-        }
-      })
-      .then((u) => {
-        unlisten = u;
-      });
-    return () => unlisten?.();
-  }, []);
+  // NOTE: the card intentionally does NOT dismiss on click-away. It's a normal (not always-on-top) movable
+  // window that persists until Close/Apply/Esc, so you can click into other windows to reference things
+  // without losing it. If it slips behind other windows, pressing the review hotkey again raises it back to
+  // the front (handled backend-side in ReviewSelectionAction) rather than opening a second card.
 
   const aiHint = t(
     "settings.review.aiHint",
@@ -312,14 +292,10 @@ const ReviewOverlay: React.FC = () => {
       ref={cardRef}
       className="font-sans flex w-screen flex-col overflow-hidden rounded-xl border border-hairline-strong bg-panel text-text"
     >
-      {/* Drag handle — grab here to move the card (the window steals focus, so this needs an explicit
-          drag region). Interactive children below aren't drag regions, so they still click normally. */}
+      {/* Drag handle — grab here to move the card. Interactive children below aren't drag regions, so they
+          still click normally. */}
       <div
         data-tauri-drag-region
-        onMouseDown={() => {
-          // Grab-to-move: suppress click-away-dismiss for ~1.2s so the drag's transient blur doesn't close it.
-          suppressCloseUntilRef.current = Date.now() + 1200;
-        }}
         className="flex cursor-move items-center justify-between border-b border-hairline px-3 py-1.5 select-none"
       >
         <span

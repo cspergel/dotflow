@@ -1120,7 +1120,11 @@ impl ShortcutAction for ReviewSelectionAction {
         // itself as the source window. Cleared in `hide_review_overlay` (apply/cancel) and on the paths
         // below. Uses `swap` so the check-and-set is atomic.
         if crate::REVIEW_OPEN.swap(true, std::sync::atomic::Ordering::SeqCst) {
-            log::info!("Review overlay already open — ignoring re-fire");
+            // Already open — bring the card back to the front instead of a no-op or a second card. Since it
+            // isn't always-on-top (it can slip behind other windows), re-pressing the hotkey is how the user
+            // resurfaces it. Does NOT re-copy a new selection; close it (Esc/Apply) to review something else.
+            log::info!("Review overlay already open — raising it to the front");
+            crate::overlay::raise_review_overlay(app);
             return;
         }
         let app = app.clone();
