@@ -60,6 +60,30 @@ pub static FILE_LOG_LEVEL: AtomicU8 = AtomicU8::new(log::LevelFilter::Debug as u
 /// and whenever debug mode is toggled (see `shortcut::change_debug_mode_setting`).
 pub static WEBVIEW_LOG_STREAMING: AtomicBool = AtomicBool::new(false);
 
+/// Shared state for the selection-review overlay (design: "selection → review overlay").
+///
+/// Captured when the review hotkey fires and consumed by the apply/cancel commands so the reviewed
+/// result can be pasted back into the field it came from and the user's clipboard restored. Managed via
+/// `app.manage(ReviewContext(Mutex::new(None)))`.
+pub struct ReviewContext(pub std::sync::Mutex<Option<ReviewCtx>>);
+
+/// The per-invocation context stashed while the review card is open.
+pub struct ReviewCtx {
+    /// The window that had focus when the hotkey fired (the field we came from). `GetForegroundWindow`
+    /// at fire time; refocused before pasting the result back.
+    pub source_hwnd: Option<isize>,
+    /// The user's clipboard before the copy phase clobbered it — restored on apply AND cancel [F1].
+    pub original_clipboard: String,
+    /// `(selected_text, ai_available)` — stored so a late-mounting webview can PULL it if it missed the
+    /// `review-text` emit [F11].
+    pub payload: Option<(String, bool)>,
+}
+
+/// Re-entrancy guard: `true` while the review card is open, so a second hotkey press is ignored instead
+/// of capturing the overlay itself as the source window [F9]. Set in the action, cleared in
+/// `hide_review_overlay`.
+pub static REVIEW_OPEN: AtomicBool = AtomicBool::new(false);
+
 fn level_filter_from_u8(value: u8) -> log::LevelFilter {
     match value {
         0 => log::LevelFilter::Off,
@@ -186,6 +210,9 @@ fn initialize_core_logic(app_handle: &AppHandle) {
     app_handle.manage(transcription_manager.clone());
     app_handle.manage(history_manager.clone());
     app_handle.manage(phrase_manager.clone());
+
+    // DotFlow: selection-review overlay context (captured at hotkey fire, consumed by apply/cancel).
+    app_handle.manage(ReviewContext(std::sync::Mutex::new(None)));
 
     // DotFlow: the EXPERIMENTAL typed text expander (default OFF). Managed here so the settings toggle can
     // start/stop it live; if the setting is already on from a previous session, start the keyboard monitor
@@ -324,6 +351,9 @@ fn initialize_core_logic(app_handle: &AppHandle) {
 
     // Create the recording overlay window (hidden by default)
     utils::create_recording_overlay(app_handle);
+
+    // Create the selection-review overlay window (hidden by default)
+    utils::create_review_overlay(app_handle);
 }
 
 #[tauri::command]

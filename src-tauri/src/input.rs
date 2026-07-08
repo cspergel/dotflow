@@ -182,3 +182,86 @@ pub fn paste_text_direct(enigo: &mut Enigo, text: &str) -> Result<(), String> {
 
     Ok(())
 }
+
+// --- Win32 foreground/focus helpers (selection-review overlay) -----------------------------------
+//
+// The review hotkey must capture the field it fired from, then later refocus it to paste the reviewed
+// result back. Under the default HandyKeys backend we are NOT the foreground app, so a plain
+// `SetForegroundWindow` is denied by the foreground-lock — `force_foreground` performs the standard
+// AttachThreadInput dance to reliably steal focus (finding [F2]). HWND is stored/passed as `isize` so
+// the state type stays platform-agnostic. On non-Windows these are stubs.
+
+/// The window that currently has foreground focus, as a raw HWND cast to `isize`. `None` if there is no
+/// foreground window (or on non-Windows).
+#[cfg(target_os = "windows")]
+pub fn get_foreground_window() -> Option<isize> {
+    use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
+    let hwnd = unsafe { GetForegroundWindow() };
+    if hwnd.0.is_null() {
+        None
+    } else {
+        Some(hwnd.0 as isize)
+    }
+}
+#[cfg(not(target_os = "windows"))]
+pub fn get_foreground_window() -> Option<isize> {
+    None
+}
+
+/// Attempt to bring `hwnd` to the foreground with a plain `SetForegroundWindow`. Returns whether the OS
+/// honored the request (often `false` when we are not already foreground — use `force_foreground`).
+#[cfg(target_os = "windows")]
+pub fn set_foreground_window(hwnd: isize) -> bool {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::SetForegroundWindow;
+    unsafe { SetForegroundWindow(HWND(hwnd as *mut _)).as_bool() }
+}
+#[cfg(not(target_os = "windows"))]
+pub fn set_foreground_window(_hwnd: isize) -> bool {
+    false
+}
+
+/// Reliably bring `target` to the foreground using the AttachThreadInput dance: temporarily attach our
+/// thread's input queue to the current foreground window's thread so the OS lets us call
+/// `SetForegroundWindow`, then detach. Needed because the HandyKeys backend confers no activation rights
+/// [F2]. Returns whether `SetForegroundWindow` reported success (still verify with a foreground poll).
+#[cfg(target_os = "windows")]
+pub fn force_foreground(target: isize) -> bool {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        BringWindowToTop, GetForegroundWindow, GetWindowThreadProcessId, IsWindow,
+        SetForegroundWindow,
+    };
+    unsafe {
+        let hwnd = HWND(target as *mut _);
+        if !IsWindow(Some(hwnd)).as_bool() {
+            return false;
+        }
+        let fg = GetForegroundWindow();
+        let cur = GetCurrentThreadId();
+        let fg_thread = GetWindowThreadProcessId(fg, None);
+        let _ = AttachThreadInput(cur, fg_thread, true);
+        let _ = BringWindowToTop(hwnd);
+        let ok = SetForegroundWindow(hwnd).as_bool();
+        let _ = AttachThreadInput(cur, fg_thread, false);
+        ok
+    }
+}
+#[cfg(not(target_os = "windows"))]
+pub fn force_foreground(_target: isize) -> bool {
+    false
+}
+
+/// Whether `hwnd` still refers to an existing window. Used as a validity guard before refocusing +
+/// pasting so a result never lands in a random window if the source app closed.
+#[cfg(target_os = "windows")]
+pub fn is_window(hwnd: isize) -> bool {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::IsWindow;
+    unsafe { IsWindow(Some(HWND(hwnd as *mut _))).as_bool() }
+}
+#[cfg(not(target_os = "windows"))]
+pub fn is_window(_hwnd: isize) -> bool {
+    true
+}
