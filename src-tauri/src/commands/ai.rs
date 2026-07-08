@@ -47,7 +47,12 @@ pub async fn ai_transform(app: AppHandle, text: String, action: String) -> Resul
         return crate::actions::ai_transform_with_llm(&settings, system, &text)
             .await
             .map(|s| s.trim().to_string())
-            .ok_or_else(|| "AI transform failed (post-process LLM returned nothing)".to_string());
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| {
+                "The configured AI provider returned no result — check it's running and configured \
+                 correctly (or select a local model)."
+                    .to_string()
+            });
     }
 
     // Fallback backend: a local offline GGUF model. Only compiled in `local-llm` builds.
@@ -63,7 +68,17 @@ pub async fn ai_transform(app: AppHandle, text: String, action: String) -> Resul
                 })
                 .await
                 .map_err(|e| format!("local generate task failed: {e}"))?;
-                return out.map(|s| s.trim().to_string());
+                // Reject an empty/whitespace-only result — otherwise Apply could clobber the user's
+                // selection with nothing (asymmetric with the cloud path above).
+                return out.and_then(|s| {
+                    let s = s.trim().to_string();
+                    if s.is_empty() {
+                        Err("The local model returned an empty result — try again or a larger model."
+                            .to_string())
+                    } else {
+                        Ok(s)
+                    }
+                });
             }
         }
     }

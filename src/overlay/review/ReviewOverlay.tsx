@@ -138,6 +138,9 @@ const ReviewOverlay: React.FC = () => {
     setAiLoading(true);
     setAiError(null);
     setAiResult("");
+    // Clear any stale result from a previous action so Apply/Copy can't paste the WRONG output during the
+    // "Working…" window: `reviewResult || text` now falls back to the original text, not the prior result.
+    setReviewResult("");
     void commands
       .aiTransform(text, activeAction)
       .then((res) => {
@@ -167,6 +170,7 @@ const ReviewOverlay: React.FC = () => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Enter") {
         if ((event.target as HTMLElement)?.tagName === "BUTTON") return;
+        if (aiLoading) return; // don't apply mid-transform (result isn't ready)
         event.preventDefault();
         void handleApply();
       } else if (event.key === "Escape") {
@@ -176,7 +180,7 @@ const ReviewOverlay: React.FC = () => {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [handleApply, handleClose]);
+  }, [handleApply, handleClose, aiLoading]);
 
   // Size the window to the card's content so it doesn't cover more of the screen than it needs (a fixed
   // 420x340 box left a lot of dead space and obscured text). Capped at CARD_MAX_HEIGHT; the body scrolls
@@ -343,14 +347,16 @@ const ReviewOverlay: React.FC = () => {
         <button
           type="button"
           onClick={() => void handleCopy()}
-          className="rounded-md border border-hairline-strong px-3 py-1.5 text-xs font-medium text-text hover:bg-inset"
+          disabled={aiLoading}
+          className="rounded-md border border-hairline-strong px-3 py-1.5 text-xs font-medium text-text hover:bg-inset disabled:cursor-not-allowed disabled:opacity-40"
         >
           {t("settings.review.copy", "Copy")}
         </button>
         <button
           type="button"
           onClick={() => void handleApply()}
-          className="rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-white hover:brightness-95"
+          disabled={aiLoading}
+          className="rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-white hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-40"
         >
           {t("settings.review.apply", "Apply")}
         </button>
