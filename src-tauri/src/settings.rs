@@ -417,6 +417,8 @@ pub struct AppSettings {
     pub auto_submit_key: AutoSubmitKey,
     #[serde(default = "default_post_process_enabled")]
     pub post_process_enabled: bool,
+    #[serde(default = "default_selection_review_enabled")]
+    pub selection_review_enabled: bool,
     #[serde(default = "default_post_process_provider_id")]
     pub post_process_provider_id: String,
     #[serde(default = "default_post_process_providers")]
@@ -584,6 +586,10 @@ fn default_sound_theme() -> SoundTheme {
 
 fn default_post_process_enabled() -> bool {
     false
+}
+
+fn default_selection_review_enabled() -> bool {
+    true
 }
 
 fn default_app_language() -> String {
@@ -861,6 +867,25 @@ pub fn get_default_settings() -> AppSettings {
         },
     );
 
+    // DotFlow: review the currently-selected text in a floating card near the cursor. NB: avoid Ctrl+Alt
+    // on Windows/Linux — that combo is AltGr and gets swallowed by the keyboard layout instead of firing.
+    #[cfg(target_os = "macos")]
+    let default_review_shortcut = "cmd+shift+j";
+    #[cfg(not(target_os = "macos"))]
+    let default_review_shortcut = "ctrl+shift+j";
+    bindings.insert(
+        "review_selection".to_string(),
+        ShortcutBinding {
+            id: "review_selection".to_string(),
+            name: "Review Selected Text".to_string(),
+            description: "Copies the selected text and opens a floating review card near the cursor \
+                to proofread (offline) or run an AI rewrite before pasting it back."
+                .to_string(),
+            default_binding: default_review_shortcut.to_string(),
+            current_binding: default_review_shortcut.to_string(),
+        },
+    );
+
     AppSettings {
         settings_schema_version: default_settings_schema_version(),
         bindings,
@@ -899,6 +924,7 @@ pub fn get_default_settings() -> AppSettings {
         auto_submit: default_auto_submit(),
         auto_submit_key: AutoSubmitKey::default(),
         post_process_enabled: default_post_process_enabled(),
+        selection_review_enabled: default_selection_review_enabled(),
         post_process_provider_id: default_post_process_provider_id(),
         post_process_providers: default_post_process_providers(),
         post_process_api_keys: default_post_process_api_keys(),
@@ -1141,6 +1167,23 @@ mod tests {
         assert_eq!(
             settings.settings_schema_version,
             CURRENT_SETTINGS_SCHEMA_VERSION
+        );
+    }
+
+    #[test]
+    fn defaults_include_review_selection_binding_and_flag() {
+        let s = get_default_settings();
+        assert!(s.selection_review_enabled, "review must default ON");
+        let b = s
+            .bindings
+            .get("review_selection")
+            .expect("review_selection binding missing");
+        assert_eq!(b.id, "review_selection");
+        // Must carry a modifier and must NOT be Ctrl+Alt (AltGr) — see validator rule.
+        assert!(b.default_binding.contains("shift") || b.default_binding.contains("ctrl"));
+        assert!(
+            !(b.default_binding.contains("ctrl") && b.default_binding.contains("alt")),
+            "Ctrl+Alt is AltGr on Windows"
         );
     }
 

@@ -397,6 +397,11 @@ fn register_all_shortcuts_for_implementation(
             continue;
         }
 
+        // Skip the selection-review shortcut when the feature is disabled
+        if id == "review_selection" && !current_settings.selection_review_enabled {
+            continue;
+        }
+
         let mut binding = current_settings
             .bindings
             .get(id)
