@@ -7,7 +7,7 @@ mod catalog;
 pub mod cli;
 mod clipboard;
 mod commands;
-mod dotflow;
+pub mod dotflow;
 mod helpers;
 mod input;
 mod llm_client;

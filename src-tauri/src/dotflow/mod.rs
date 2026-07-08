@@ -13,6 +13,8 @@
 pub mod cleanup;
 pub mod field_stream;
 pub mod grammar;
+#[cfg(feature = "local-llm")]
+pub mod local_llm;
 pub mod overlay_pos;
 pub mod phrases;
 pub mod punctuation;
