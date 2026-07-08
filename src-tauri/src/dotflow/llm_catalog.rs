@@ -55,30 +55,14 @@ pub struct LlmModelInfo {
 pub fn catalog() -> Vec<LlmModelInfo> {
     vec![
         LlmModelInfo {
-            id: "gemma-4-e2b-it".to_string(),
-            name: "Gemma 4 E2B Instruct".to_string(),
-            params: "~2.3B (E2B)".to_string(),
-            size_bytes: 3_106_736_256,
-            license: "Apache-2.0".to_string(),
-            commercial_ok: true,
-            recommended: true,
-            note: "Google's on-device model. Apache-2.0 (commercial-friendly) and the best quality here — larger download."
-                .to_string(),
-            url: "https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/main/gemma-4-E2B-it-Q4_K_M.gguf"
-                .to_string(),
-            filename: "gemma-4-E2B-it-Q4_K_M.gguf".to_string(),
-            downloaded: false,
-            active: false,
-        },
-        LlmModelInfo {
             id: "qwen2.5-1.5b-instruct".to_string(),
             name: "Qwen2.5 1.5B Instruct".to_string(),
             params: "1.5B".to_string(),
             size_bytes: 986_048_768,
             license: "Apache-2.0".to_string(),
             commercial_ok: true,
-            recommended: false,
-            note: "Clean and fast (Apache-2.0). The lightweight option — smallest download, quickest on modest machines."
+            recommended: true,
+            note: "Clean (Apache-2.0), fast, and a small download. The reliable default — works with the current offline engine."
                 .to_string(),
             url: "https://huggingface.co/bartowski/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/Qwen2.5-1.5B-Instruct-Q4_K_M.gguf"
                 .to_string(),
@@ -165,10 +149,11 @@ mod tests {
         assert_eq!(before, ids.len(), "catalog ids must be unique");
 
         // Exactly one recommended default, and it must be commercially usable (never default users onto a
-        // non-commercial model). Currently Gemma 4 E2B (Apache-2.0).
+        // non-commercial model) AND must load on the bundled engine. Currently Qwen2.5 1.5B (Apache-2.0);
+        // Gemma 4 is excluded until llama-cpp-2's llama.cpp supports the `gemma4` architecture.
         let recommended: Vec<&LlmModelInfo> = cat.iter().filter(|m| m.recommended).collect();
         assert_eq!(recommended.len(), 1, "exactly one recommended default");
-        assert_eq!(recommended[0].id, "gemma-4-e2b-it");
+        assert_eq!(recommended[0].id, "qwen2.5-1.5b-instruct");
         assert!(
             recommended[0].commercial_ok,
             "the recommended default must be commercially licensed"

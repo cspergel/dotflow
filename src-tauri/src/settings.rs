@@ -873,12 +873,13 @@ pub fn get_default_settings() -> AppSettings {
         },
     );
 
-    // DotFlow: review the currently-selected text in a floating card near the cursor. NB: avoid Ctrl+Alt
-    // on Windows/Linux — that combo is AltGr and gets swallowed by the keyboard layout instead of firing.
+    // DotFlow: review the currently-selected text in a floating card near the cursor. NB: avoid Ctrl+Alt on
+    // Windows/Linux (AltGr, swallowed by the layout), AND avoid Ctrl+Shift+I/J/C — those are the webview's
+    // built-in DevTools shortcuts, so when the focused overlay receives them it opens DevTools instead.
     #[cfg(target_os = "macos")]
-    let default_review_shortcut = "cmd+shift+j";
+    let default_review_shortcut = "cmd+shift+e";
     #[cfg(not(target_os = "macos"))]
-    let default_review_shortcut = "ctrl+shift+j";
+    let default_review_shortcut = "ctrl+shift+e";
     bindings.insert(
         "review_selection".to_string(),
         ShortcutBinding {
