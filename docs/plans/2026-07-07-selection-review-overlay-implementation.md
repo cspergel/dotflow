@@ -29,6 +29,51 @@ React/TypeScript, Harper (offline grammar). Phase B: `llama-cpp-2` + GGUF (reuse
 
 ---
 
+## Adversarial-sweep fold (2026-07-07)
+
+This plan was swept by 4 decorrelated skeptics; the DTF gate returned HALT+FOLD on 5 CRITICAL/HIGH.
+The findings below are folded into the tasks (each fix tagged `[Fxx]`). Do NOT treat a green build as
+proof any of these are resolved — the OS-boundary ones (F1/F2/F3/F5/F6/F9) are proven only by the
+Task A11 exercise. Summary of what changed vs the first draft:
+
+- **[F1] CRITICAL** — the review flow now stashes the user's `original` clipboard and **restores it on
+  both Apply and Cancel** (it did neither before → silent clipboard destruction every use).
+- **[F2/F3] HIGH** — focus is now handled with an explicit **AttachThreadInput force-foreground** helper
+  (the default HandyKeys backend grants no `SetForegroundWindow` rights), and Apply **only pastes if
+  refocus actually succeeded** (`IsWindow` + foreground check), else it aborts and leaves the result on
+  the clipboard + notifies.
+- **[F4] HIGH** — Task A4 rewritten to the real `write_settings(&app, settings)` (by value, no `?`) and
+  the real single-binding register/unregister (no invented `reregister_all`).
+- **[F5] HIGH** — the `selection_review_enabled` gate is applied at **all three** registration sites via
+  one shared helper.
+- **[F6] MED** — cursor/monitor coords are converted to **logical px (÷ scale_factor)** before the pure
+  clamp; the clamp stays pure and gains an origin≠0 test.
+- **[F7] MED** — the review overlay entry imports a stylesheet that does `@import "tailwindcss"` so
+  ReviewPanel's utilities render.
+- **[F8] MED** — one signature: `show_review_overlay(app, text, ai_available)`, work area computed inside.
+- **[F9] MED** — a re-entrancy flag ignores the hotkey while the card is open.
+- **[F10] MED** — the impossible A2 test assertion is replaced with a satisfiable realistic-clamp case.
+- **[F11] MED** — payload is stored in state and **pulled on mount** (plus the emit), so a late listener
+  never yields a blank card.
+- **[F12] LOW** `lock().ok()` not `unwrap()`. **[F13] LOW** synchronous hide before paste. **[F14] LOW**
+  Phase B dep is `optional=true` behind `local-llm` + example `required-features`. **[F15]** "shippable"
+  reframed: Phase A ships only after F1 is fixed; AI chips are inert until Phase B.
+
+Shared state introduced by the fold (replaces the HWND-only state in the first draft):
+
+```rust
+// src-tauri/src/lib.rs (or a small module) — managed via app.manage(...)
+pub struct ReviewContext(pub Mutex<Option<ReviewCtx>>);
+pub struct ReviewCtx {
+    pub source_hwnd: Option<isize>,   // the field we came from (GetForegroundWindow at fire time)
+    pub original_clipboard: String,   // [F1] restore this on apply AND cancel
+    pub payload: Option<(String, bool)>, // [F11] (selected_text, ai_available) pulled on mount
+}
+pub static REVIEW_OPEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false); // [F9]
+```
+
+---
+
 # PHASE A — The overlay (v1, ships without a bundled LLM)
 
 ## Task A1: Extract a shared `copy_selection` helper (DRY the copy phase)
@@ -146,14 +191,34 @@ mod tests {
     }
 
     #[test]
-    fn never_leaves_work_area_when_even_a_flip_overflows() {
-        // Tiny work area, window bigger than the gap allows either way: must clamp to the edge,
-        // NOT return a negative/off-screen coord. Fails if clamping is removed.
+    fn clamps_to_edge_when_flip_would_still_overflow() {
+        // [F10] Realistic case: window FITS the work area, but anchoring+flipping near the top-left
+        // corner would push it off the left/top. Must clamp back to the edge, not return negatives.
+        // Fails if the final .clamp() lines are deleted (they return (-427, -302) without them).
+        let wa = WorkArea { x: 0.0, y: 0.0, width: 800.0, height: 600.0 };
+        let (x, y) = clamp_overlay_position((5.0, 5.0), (420.0, 300.0), wa);
+        // default 17,17 fits (17+420=437<=800) so NO flip; stays at 17,17 — assert it's on-screen and
+        // exactly the anchored position (catches an unintended flip AND an over-eager clamp).
+        assert_eq!((x, y), (17.0, 17.0));
+        assert!(x >= wa.x && x + 420.0 <= wa.width, "off right/left edge");
+        assert!(y >= wa.y && y + 300.0 <= wa.height, "off top/bottom edge");
+    }
+
+    #[test]
+    fn clamps_hard_when_window_exceeds_work_area() {
+        // Degenerate: window wider than the work area — cannot fully fit, so clamp pins the top-left
+        // to the work-area origin (the best we can do). Asserts the pin, NOT an impossible "fully
+        // on-screen". Fails (returns negatives) if the clamp lines are removed.
         let tiny = WorkArea { x: 0.0, y: 0.0, width: 400.0, height: 300.0 };
-        let (x, y) = clamp_overlay_position((10.0, 10.0), (420.0, 300.0), tiny);
-        assert!(x >= tiny.x && x + 420.0 <= tiny.width + 1.0, "x off-screen: {x}");
-        assert!(y >= tiny.y, "y off-screen: {y}");
-        assert_eq!((x, y), (0.0, 0.0));
+        assert_eq!(clamp_overlay_position((10.0, 10.0), (420.0, 320.0), tiny), (0.0, 0.0));
+    }
+
+    #[test]
+    fn respects_non_zero_monitor_origin() {
+        // [F6] Second monitor at logical origin (1920, 0). Mid-screen cursor must anchor below-right
+        // relative to THAT origin, not (0,0). Caller is responsible for passing LOGICAL coords.
+        let m2 = WorkArea { x: 1920.0, y: 0.0, width: 1920.0, height: 1080.0 };
+        assert_eq!(clamp_overlay_position((2400.0, 500.0), (420.0, 300.0), m2), (2412.0, 512.0));
     }
 }
 ```
@@ -180,9 +245,14 @@ pub fn clamp_overlay_position(cursor: (f64, f64), win: (f64, f64), work: WorkAre
 }
 ```
 
-**Step 4: Run to verify pass.** Run: `cargo test --lib overlay_pos` — Expected: 4 passed.
+**Step 4: Run to verify pass.** Run: `cargo test --lib overlay_pos` — Expected: **6 passed**.
 
-**Step 5: Commit:** `git commit -m "feat(overlay): pure cursor-anchored position clamping + tests"`
+**Step 5:** Add a doc comment on `clamp_overlay_position` stating **all inputs MUST be logical pixels**
+(the caller in Task A5 converts enigo's physical cursor + physical monitor bounds by `÷ scale_factor`
+before calling — see `[F6]`). The pure function stays untested-against-DPI on purpose; the conversion
+is exercised in the A11 live run.
+
+**Step 6: Commit:** `git commit -m "feat(overlay): pure cursor-anchored position clamping + tests"`
 
 ---
 
@@ -245,13 +315,25 @@ d) Add the binding in `get_default_settings()` (after the `cleanup_selection` bl
 
 **Step 4: Run to verify pass.** Run: `cargo test --lib defaults_include_review_selection` — Expected: PASS.
 
-**Step 5:** Gate registration on the flag — in `src-tauri/src/shortcut/tauri_impl.rs::init_shortcuts`
-(~line 27, mirror the `transcribe_with_post_process` skip):
+**Step 5: [F5] Gate registration at ALL THREE sites** (the first draft patched only one; the default
+Windows backend is HandyKeys, so a single gate leaves the hotkey live). Add a shared predicate and use
+it everywhere the `transcribe_with_post_process` skip appears:
 ```rust
-        if id == "review_selection" && !user_settings.selection_review_enabled { continue; }
+// src-tauri/src/shortcut/mod.rs (or wherever is shared)
+pub fn review_selection_registrable(id: &str, s: &settings::AppSettings) -> bool {
+    !(id == "review_selection" && !s.selection_review_enabled)
+}
 ```
+Apply the skip at each site (grep for the existing `transcribe_with_post_process` skip to find them):
+- `src-tauri/src/shortcut/tauri_impl.rs:27` (Tauri backend init)
+- `src-tauri/src/shortcut/mod.rs:396` (`register_all_shortcuts_for_implementation`, the runtime re-register path)
+- `src-tauri/src/shortcut/handy_keys.rs:437` (the **default** HandyKeys backend)
 
-**Step 6: Commit:** `git commit -m "feat(settings): review_selection binding + selection_review_enabled flag"`
+e.g. at each: `if id == "review_selection" && !user_settings.selection_review_enabled { continue; }`
+> Verify the exact three line numbers before editing — they may drift. The acceptance test (A11) that
+> "toggle off → hotkey no longer fires" MUST be checked on the **default (HandyKeys)** backend, not just Tauri.
+
+**Step 6: Commit:** `git commit -m "feat(settings): review_selection binding + flag, gated at all backends"`
 
 ---
 
@@ -263,21 +345,38 @@ d) Add the binding in `get_default_settings()` (after the `cleanup_selection` bl
 - Modify: `src/bindings.ts` (hand-add command + `AppSettings` field)
 - Modify: `src/stores/settingsStore.ts:76-168` (add `settingUpdaters` entry)
 
-**Step 1:** Add the Rust command (model on the typed-expander change setter in `shortcut/mod.rs`):
+**Step 1: [F4]** Add the Rust command — **read `change_post_process_enabled_setting` in
+`shortcut/mod.rs` first and mirror it EXACTLY** (it is the true sibling: a bool that gates one binding).
+The first draft's `write_settings(&app, &settings)?` and `reregister_all` were both wrong. Real shapes:
+- `pub fn write_settings(app: &AppHandle, settings: AppSettings)` — takes `AppSettings` **by value**,
+  returns **`()`** (no `?`). Call: `settings::write_settings(&app, settings);`
+- There is **no** `reregister_all`. Register/unregister the **single** `review_selection` binding by name
+  using the same helpers the sibling uses (`register_shortcut` / `unregister_shortcut`, backend-aware).
+
 ```rust
 #[tauri::command]
 #[specta::specta]
 pub fn change_selection_review_enabled_setting(app: AppHandle, enabled: bool) -> Result<(), String> {
     let mut settings = crate::settings::load_or_create_app_settings(&app);
     settings.selection_review_enabled = enabled;
-    crate::settings::write_settings(&app, &settings)?; // use whatever the sibling setters call
-    // Re-init shortcuts so the binding registers/unregisters immediately:
-    crate::shortcut::tauri_impl::reregister_all(&app); // or the existing re-init entry point
+    crate::settings::write_settings(&app, settings.clone()); // by value, no `?`
+
+    // Register/unregister ONLY the review_selection binding, exactly like the sibling does for its own.
+    if let Some(binding) = settings.bindings.get("review_selection").cloned() {
+        if enabled {
+            let _ = /* the same register call change_post_process_enabled_setting uses */
+                crate::shortcut::register_binding_for_current_backend(&app, binding);
+        } else {
+            let _ = crate::shortcut::unregister_binding_for_current_backend(&app, &binding);
+        }
+    }
     Ok(())
 }
 ```
-> NOTE: match the EXACT persistence + re-register calls the neighbouring `change_typed_expander_setting`
-> uses (read that function first). If it emits a settings-changed event, do the same.
+> The exact helper names (`register_binding_for_current_backend` above is a PLACEHOLDER) must be taken
+> verbatim from `change_post_process_enabled_setting` — use whatever it calls so this is backend-aware
+> (HandyKeys vs Tauri). If that function re-runs `register_all_shortcuts_for_implementation`, do the same
+> instead of the single-binding calls. Do NOT invent an API.
 
 **Step 2:** Register in `collect_commands!` (`lib.rs:661`, beside the cleanup commands):
 ```rust
@@ -325,11 +424,22 @@ review card is *focusable*, so a normal webview window is correct everywhere. ma
 ```
 
 **Step 2:** `src/overlay/review/index.html` — copy `src/overlay/index.html` but title "Review" and
-`src="/src/overlay/review/main.tsx"`. Body background: use a solid panel (NOT transparent) since this
-is an opaque card — set `background: transparent` on html/body and let the React root paint the card.
+`src="/src/overlay/review/main.tsx"`. Body background: `transparent` on html/body; the React root paints
+the opaque card.
 
-**Step 3:** `main.tsx` renders `<ReviewOverlay />` (mirror `src/overlay/main.tsx`, import `@/i18n`).
-`ReviewOverlay.tsx` starts as a stub that renders "review overlay" (fleshed out in A8).
+**Step 3: [F7]** `main.tsx` renders `<ReviewOverlay />` (mirror `src/overlay/main.tsx`, import `@/i18n`)
+AND **imports a stylesheet that pulls in Tailwind**, because `ReviewPanel` is built from Tailwind v4
+utilities (`bg-panel`, `flex`, `px-3`, `decoration-wavy`, …) which are only emitted where
+`@import "tailwindcss"` exists — currently only `src/App.css` (the main entry). The recording overlay
+dodged this by using hand-written CSS classes; ReviewPanel does NOT. So create
+`src/overlay/review/ReviewOverlay.css` containing **both**:
+```css
+@import "tailwindcss";
+@import "../../styles/theme.css";
+```
+and `import "./ReviewOverlay.css";` in `main.tsx`. Without this the card renders completely unstyled and
+`tsc`/`eslint` stay green — the failure only shows at the A11 smoke. `ReviewOverlay.tsx` starts as a stub
+(fleshed out in A8).
 
 **Step 4:** Rust window creator in `overlay.rs` (label `"review_overlay"`):
 ```rust
@@ -359,13 +469,48 @@ pub fn create_review_overlay(app_handle: &AppHandle) {
 }
 ```
 
-**Step 5:** `show_review_overlay(app, text, work_area)` — set size, compute pos via
-`clamp_overlay_position` (feed cursor from `input::get_cursor_position` + monitor bounds from
-`get_monitor_with_cursor`), `set_position`, `show`, `force_overlay_topmost` (Windows), then
-`emit_to("review_overlay", "review-text", ReviewPayload { text, ai_available })`. `hide_review_overlay`
-mirrors `hide_recording_overlay` (emit `"review-hide"`, then hide).
+**Step 5: [F8] ONE signature** — `show_review_overlay(app, text: &str, ai_available: bool)`; the work
+area is computed **inside**. **[F6]** convert to logical px before the pure clamp; **[F11]** store the
+payload in `ReviewContext` and emit; **[F2]** force-foreground the card so keyboard nav works; **[F13]**
+use a synchronous hide (see A7). Sketch:
+```rust
+pub fn show_review_overlay(app: &AppHandle, text: &str, ai_available: bool) -> Result<(), String> {
+    let win = app.get_webview_window("review_overlay").ok_or("review overlay missing")?;
+    // [F6] enigo cursor + tauri Monitor are PHYSICAL px; the recording overlay divides by scale_factor
+    // (overlay.rs:170-184,233-237). Do the same so clamp + LogicalPosition all live in logical space.
+    let scale = win.scale_factor().unwrap_or(1.0);
+    let (pcx, pcy) = crate::input::get_cursor_position(app).unwrap_or((0, 0));
+    let cursor = (pcx as f64 / scale, pcy as f64 / scale);
+    let mon = get_monitor_with_cursor(app); // returns a monitor; take .position()/.size() ÷ scale
+    let work = WorkArea { /* mon.position()/scale, mon.size()/scale */ };
+    let (x, y) = crate::dotflow::overlay_pos::clamp_overlay_position(cursor, (REVIEW_WIDTH, REVIEW_HEIGHT), work);
+    let _ = win.set_size(tauri::Size::Logical(tauri::LogicalSize { width: REVIEW_WIDTH, height: REVIEW_HEIGHT }));
+    let _ = win.set_position(tauri::Position::Logical(tauri::LogicalPosition { x, y }));
+    // [F11] persist payload so a late-mounting webview can PULL it (event may fire before listener ready)
+    if let Some(state) = app.try_state::<crate::ReviewContext>() {
+        if let Ok(mut c) = state.0.lock() {
+            if let Some(ctx) = c.as_mut() { ctx.payload = Some((text.to_string(), ai_available)); }
+        }
+    }
+    let _ = win.show();
+    #[cfg(target_os = "windows")] force_overlay_topmost(&win);
+    // [F2] the default HandyKeys backend confers NO activation rights; explicitly foreground our card so
+    // Enter/Esc/arrows work without a click. Use AttachThreadInput-based force_foreground (Task A6 Step 1b).
+    #[cfg(target_os = "windows")]
+    if let Ok(hwnd) = win.hwnd() { crate::input::force_foreground(hwnd.0 as isize); }
+    let _ = win.set_focus();
+    // emit as well (fast path when the listener is already up)
+    let _ = app.emit_to("review_overlay", "review-text",
+        serde_json::json!({ "text": text, "ai_available": ai_available }));
+    Ok(())
+}
+```
+**Synchronous hide [F13]:** `hide_review_overlay` must call `win.hide()` **immediately** (NOT the 300ms
+deferred pattern of `hide_recording_overlay`) so the always-on-top card is gone before A7 refocuses and
+pastes. It also clears `REVIEW_OPEN` (A6/F9) and emits `"review-hide"` for the UI.
 
-**Step 6:** Wire creation at `lib.rs:326`: `utils::create_review_overlay(app_handle);`
+**Step 6:** Wire creation at `lib.rs:326`: `utils::create_review_overlay(app_handle);` and manage the new
+state: `app.manage(crate::ReviewContext(std::sync::Mutex::new(None)));`
 
 **Step 7:** Build. Run: `cargo build --bin dotflow` — Expected: clean. (Window not shown yet.)
 
@@ -377,8 +522,8 @@ mirrors `hide_recording_overlay` (emit `"review-hide"`, then hide).
 
 **Files:**
 - Modify: `src-tauri/src/actions.rs` (new action + `ACTION_MAP` entry)
-- Modify: `src-tauri/src/input.rs` (add `get_foreground_window()` / `set_foreground_window(hwnd)`)
-- Modify: `src-tauri/src/lib.rs` (register a `Mutex<Option<isize>>` state for the saved HWND)
+- Modify: `src-tauri/src/input.rs` (add `get_foreground_window` / `set_foreground_window` / `force_foreground`)
+- Modify: `src-tauri/src/lib.rs` (manage `ReviewContext` + `REVIEW_OPEN` — see the fold header)
 
 **Step 1:** Add Win32 focus helpers to `input.rs` (feature `Win32_UI_WindowsAndMessaging` already on):
 ```rust
@@ -400,40 +545,98 @@ pub fn set_foreground_window(hwnd: isize) -> bool {
 #[cfg(not(target_os = "windows"))]
 pub fn set_foreground_window(_hwnd: isize) -> bool { false }
 ```
-> Verify `HWND(hwnd as *mut _)` against the crate's 0.61 HWND repr (the fg example at
-> `typed_expander/backend.rs:320` shows the in-use form — match it).
+> Verify `HWND(hwnd as *mut _)` against the crate's 0.61 HWND repr — the sweep confirmed
+> `HWND(pub *mut c_void)` and this cast is correct, matching `typed_expander/backend.rs:320`.
 
-**Step 2:** Saved-HWND state. In `lib.rs` setup add `app.manage(SavedForegroundWindow(Mutex::new(None)))`
-(define `pub struct SavedForegroundWindow(pub Mutex<Option<isize>>);`).
+**Step 1b: [F2] `force_foreground(hwnd)`** — the reliable activation the plain `set_foreground_window`
+can't guarantee (foreground-lock denies it when we're not already foreground, which is our case under
+the HandyKeys hook). Use the standard AttachThreadInput dance: attach our thread to the current
+foreground window's thread, `SetForegroundWindow`, then detach. Also add `is_window(hwnd) -> bool`
+(wrapping `IsWindow`) for A7's validity guard.
+```rust
+#[cfg(target_os = "windows")]
+pub fn force_foreground(target: isize) -> bool {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::System::Threading::GetCurrentThreadId;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetForegroundWindow, GetWindowThreadProcessId, SetForegroundWindow, IsWindow, BringWindowToTop,
+    };
+    use windows::Win32::UI::Input::KeyboardAndMouse::{AttachThreadInput};
+    unsafe {
+        let hwnd = HWND(target as *mut _);
+        if !IsWindow(Some(hwnd)).as_bool() { return false; }
+        let fg = GetForegroundWindow();
+        let cur = GetCurrentThreadId();
+        let fg_thread = GetWindowThreadProcessId(fg, None);
+        let _ = AttachThreadInput(cur, fg_thread, true);
+        let _ = BringWindowToTop(hwnd);
+        let ok = SetForegroundWindow(hwnd).as_bool();
+        let _ = AttachThreadInput(cur, fg_thread, false);
+        ok
+    }
+}
+#[cfg(not(target_os = "windows"))]
+pub fn force_foreground(_target: isize) -> bool { false }
 
-**Step 3:** The action:
+#[cfg(target_os = "windows")]
+pub fn is_window(hwnd: isize) -> bool {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::IsWindow;
+    unsafe { IsWindow(Some(HWND(hwnd as *mut _))).as_bool() }
+}
+#[cfg(not(target_os = "windows"))]
+pub fn is_window(_hwnd: isize) -> bool { true }
+```
+> `AttachThreadInput` needs the `Win32_System_Threading` feature — already enabled (Cargo.toml). Confirm
+> `IsWindow`/`AttachThreadInput` arg shapes against the 0.61 API before building; adjust if needed.
+
+**Step 2:** Manage state in `lib.rs` (per the fold header): `app.manage(crate::ReviewContext(Mutex::new(None)));`.
+`REVIEW_OPEN` is a module static, no manage needed.
+
+**Step 3: The action — with re-entrancy guard [F9], clipboard stashing [F1], safe locks [F12]:**
 ```rust
 struct ReviewSelectionAction;
 impl ShortcutAction for ReviewSelectionAction {
     fn start(&self, app: &AppHandle, _b: &str, _s: &str) {
         log::info!("Review-selection hotkey fired");   // disambiguates fired-vs-panicked
+        // [F9] ignore re-fire while the card is open (else the 2nd fire captures the OVERLAY as source).
+        if crate::REVIEW_OPEN.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            log::info!("Review overlay already open — ignoring re-fire");
+            return;
+        }
         let app = app.clone();
         tauri::async_runtime::spawn(async move {
-            if let Err(e) = review_selection(&app).await { warn!("Review selection failed: {e}"); }
+            if let Err(e) = review_selection(&app).await {
+                warn!("Review selection failed: {e}");
+                crate::REVIEW_OPEN.store(false, std::sync::atomic::Ordering::SeqCst); // release on error
+            }
         });
     }
     fn stop(&self, _a: &AppHandle, _b: &str, _s: &str) {}
 }
 
 async fn review_selection(app: &AppHandle) -> Result<(), String> {
+    use tauri_plugin_clipboard_manager::ClipboardExt;
     // Capture the field we came from BEFORE anything can steal focus.
-    let fg = crate::input::get_foreground_window();
-    if let Some(state) = app.try_state::<crate::SavedForegroundWindow>() {
-        *state.0.lock().unwrap() = fg;
+    let source_hwnd = crate::input::get_foreground_window();
+    // copy_selection returns (original_clipboard, selected); we KEEP original for restore [F1].
+    let Some((original, selected)) = copy_selection(app).await? else {
+        crate::REVIEW_OPEN.store(false, std::sync::atomic::Ordering::SeqCst); // no selection → release
+        return Ok(());
+    };
+    // Stash context so apply/cancel can restore the clipboard and refocus the right window.
+    if let Some(state) = app.try_state::<crate::ReviewContext>() {
+        if let Ok(mut c) = state.0.lock() {   // [F12] .ok() form — no unwrap()
+            *c = Some(crate::ReviewCtx { source_hwnd, original_clipboard: original, payload: None });
+        }
     }
-    let Some((_original, selected)) = copy_selection(app).await? else { return Ok(()); };
-    // NOTE: we intentionally do NOT restore the clipboard here — apply_review_result restores it
-    // after pasting. Stash `_original` in state alongside the HWND if you want restore-on-cancel.
     let ai_available = crate::commands::cleanup::post_process_is_configured(app.clone());
     crate::overlay::show_review_overlay(app, &selected, ai_available)?;
     Ok(())
 }
 ```
+> NOTE: `REVIEW_OPEN` is cleared in `hide_review_overlay` (A5 Step 5) which both apply and cancel call —
+> so a completed or cancelled review re-arms the hotkey.
 Register in `ACTION_MAP` (actions.rs:1053):
 ```rust
     map.insert("review_selection".to_string(),
@@ -454,46 +657,82 @@ the copied text emitted. Commit: `git commit -m "feat(actions): review_selection
 - Modify: `src-tauri/src/lib.rs:661` (register)
 - Modify: `src/bindings.ts` (hand-add binding)
 
-**Step 1:** Command:
+**Step 1: Command — with GUARDED paste [F3], clipboard restore [F1], synchronous hide [F13], safe locks [F12]:**
 ```rust
 /// Paste a reviewed result back into the field the review hotkey was fired from. Refocuses the saved
-/// foreground window, waits for it to actually regain focus, then pastes via inject_bulk. Also hides
-/// the overlay.
+/// window; ONLY pastes if the refocus actually succeeded (else the result would land in the wrong app);
+/// then restores the user's original clipboard. Hides the overlay first (synchronously).
 #[tauri::command]
 #[specta::specta]
 pub async fn apply_review_result(app: AppHandle, text: String) -> Result<(), String> {
-    crate::overlay::hide_review_overlay(&app);
-    let hwnd = app.try_state::<crate::SavedForegroundWindow>()
-        .and_then(|s| *s.0.lock().unwrap());
+    crate::overlay::hide_review_overlay(&app); // [F13] synchronous hide — card gone before we paste
+
+    // Take the whole context (hwnd + original clipboard), clearing it so a stray second apply no-ops.
+    let ctx = app.try_state::<crate::ReviewContext>()
+        .and_then(|s| s.0.lock().ok().and_then(|mut c| c.take())); // [F12] .ok(), no unwrap
     let app_c = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
+        let hwnd = ctx.as_ref().and_then(|c| c.source_hwnd);
+        // [F3] refocus, then GUARD: only paste if the source window is real AND actually foreground.
+        let mut refocused = false;
         if let Some(hwnd) = hwnd {
-            crate::input::set_foreground_window(hwnd);
-            // Poll until it actually regains foreground (don't guess) — up to ~500ms.
-            for _ in 0..25 {
-                if crate::input::get_foreground_window() == Some(hwnd) { break; }
-                std::thread::sleep(std::time::Duration::from_millis(20));
+            if crate::input::is_window(hwnd) {
+                crate::input::force_foreground(hwnd);
+                for _ in 0..25 { // poll up to ~500ms
+                    if crate::input::get_foreground_window() == Some(hwnd) { refocused = true; break; }
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
             }
-            log::info!("apply_review_result: refocused source hwnd={hwnd}"); // focus checkpoint
         }
-        if !text.trim().is_empty() {
+        log::info!("apply_review_result: refocused={refocused} hwnd={hwnd:?}"); // focus checkpoint
+
+        if refocused && !text.trim().is_empty() {
             if let Err(e) = crate::clipboard::inject_bulk(&text, &app_c) {
                 warn!("apply_review_result: paste failed: {e}");
             }
+        } else if !refocused {
+            // [F3] Do NOT blind-paste into the wrong window. Leave the result on the clipboard so the
+            // user can paste it manually, and tell them.
+            use tauri_plugin_clipboard_manager::ClipboardExt;
+            let _ = app_c.clipboard().write_text(&text);
+            warn!("apply_review_result: could not refocus source — result left on clipboard for manual paste");
+            // (Optional: emit a toast/notification event the main window shows.)
+            return; // skip the original-clipboard restore below: the result IS the clipboard now
+        }
+
+        // [F1] restore the user's ORIGINAL clipboard (inject_bulk left the result/selection on it).
+        if let Some(c) = ctx {
+            use tauri_plugin_clipboard_manager::ClipboardExt;
+            let _ = app_c.clipboard().write_text(&c.original_clipboard);
         }
     }).await.map_err(|e| format!("apply task failed: {e}"))?;
     Ok(())
 }
 ```
-Also add `pub async fn cancel_review(app: AppHandle) { crate::overlay::hide_review_overlay(&app); }`
-(command) for Esc/close.
+Cancel/close — **must also restore the clipboard [F1]** (the copy phase left `selected` on it):
+```rust
+#[tauri::command]
+#[specta::specta]
+pub fn cancel_review(app: AppHandle) {
+    crate::overlay::hide_review_overlay(&app); // clears REVIEW_OPEN
+    if let Some(ctx) = app.try_state::<crate::ReviewContext>()
+        .and_then(|s| s.0.lock().ok().and_then(|mut c| c.take())) {
+        use tauri_plugin_clipboard_manager::ClipboardExt;
+        let _ = app.clipboard().write_text(&ctx.original_clipboard); // [F1]
+    }
+}
+```
+> [F11] Also add `get_pending_review(app) -> Option<(String, bool)>` that returns `ctx.payload.clone()`
+> so the overlay can PULL its text on mount if it missed the emit (see A8).
 
-**Step 2:** Register both in `collect_commands!` (`lib.rs:661`).
+**Step 2:** Register all three (`apply_review_result`, `cancel_review`, `get_pending_review`) in
+`collect_commands!` (`lib.rs:661`).
 
-**Step 3:** Hand-add to `bindings.ts` `commands` (both return `Result<null,string>`, arg `{ text }` / none).
+**Step 3:** Hand-add to `bindings.ts` `commands` (apply/cancel return `Result<null,string>`;
+`get_pending_review` returns `[string, boolean] | null` — unwrapped).
 
 **Step 4:** Build + typecheck. Expected: clean. Commit:
-`git commit -m "feat(commands): apply_review_result refocuses source and pastes back"`
+`git commit -m "feat(commands): apply_review_result — guarded paste + clipboard restore"`
 
 ---
 
@@ -518,6 +757,12 @@ const un1 = await listen("review-text", (e) => {
   setText(p.text); setAiAvailable(p.ai_available); setActiveAction("proofread");
 });
 const un2 = await listen("review-hide", () => { /* clear */ });
+
+// [F11] PULL on mount: the backend emits "review-text" right after show(), which can race the listener
+// registration (the emit may fire before this useEffect runs). So also pull the stored payload — whichever
+// arrives first wins; setting the same text twice is harmless.
+const pending = await commands.getPendingReview();
+if (pending) { setText(pending[0]); setAiAvailable(pending[1]); setActiveAction("proofread"); }
 ```
 
 **Step 2:** Chip row. `Proofread ·offline` always enabled; `Rewrite/Formal/Summarize` disabled when
@@ -525,6 +770,11 @@ const un2 = await listen("review-hide", () => { /* clear */ });
 `<ReviewPanel text={text} onResult={setReviewResult} />`. AI chips are wired for real in Phase B; in
 Phase A they are visible-but-disabled (no local model yet, and if Ollama is configured they can call
 `previewCleanup` as an interim — OPTIONAL, keep simple: leave disabled unless `aiAvailable`).
+Put the gating in a pure helper `chipEnabled(action, aiAvailable)` (Proofread → always true; others →
+`aiAvailable`) so the logic is trivially inspectable. **Honesty note:** the design promised a UNIT test
+for this predicate, but the repo has no JS test runner (frontend "tests" = tsc/eslint only). Rather than
+stand up vitest for one predicate, this is downgraded to **exercise-verified** (A11 confirms AI chips are
+disabled when AI isn't configured). If a JS test harness is added later, add the true+false cases then.
 
 **Step 3:** Footer. `Apply` → `commands.applyReviewResult(reviewResult ?? text)`. `Copy` →
 `navigator.clipboard.writeText(reviewResult ?? text)`. `Close` → `commands.cancelReview()`.
@@ -594,20 +844,31 @@ This is where the OS-boundary behavior is *proven* (the design's non-unit-testab
 **Step 1:** `taskkill //F //IM dotflow.exe` (ensure none running). Rebuild: `cargo build --bin dotflow`.
 Ensure Vite dev server is running (`bun run dev`), launch `"C:/dtfb/debug/dotflow.exe" --debug >/tmp/x.log 2>&1 &`.
 
-**Step 2:** Use the `verify` skill / manual drive. Confirm, watching real behavior:
-- Select text in Notepad/browser, press `Ctrl+Shift+J` → card appears **at the cursor**, showing the
-  Proofread result with issues underlined.
-- Accept a fix, press `Apply` → text is replaced in the source field; a **single `Ctrl+Z` reverts** it.
-- `Esc` closes with no change. AI chips are **disabled** (no model yet / AI not configured).
-- Toggle `selection_review_enabled` off in Settings → hotkey no longer fires. Rebinding works.
-- Grep the debug log for the `Review-selection hotkey fired` and `apply_review_result: refocused` lines
-  to confirm fire + refocus actually happened (per the silent-async-panic + focus gotchas).
+**Step 2:** Use the `verify` skill / manual drive. Confirm, watching real behavior (each line is a
+folded finding — this exercise is the ONLY proof for the OS-boundary ones):
+- Select text in Notepad/browser, press `Ctrl+Shift+J` → card appears **at the cursor** (test on a
+  **HiDPI / 150%-scale display and a second monitor** — `[F6]`), showing the Proofread result underlined.
+- **[F2] Keyboard-first without a click:** with the card open but NOT clicked, press `Enter` → it Applies;
+  press `Esc` (on a fresh open) → it closes. If the keys instead land in your document, force-foreground
+  failed — investigate before shipping.
+- Accept a fix, press `Apply` → text replaced in the source field; a **single `Ctrl+Z` reverts** it.
+- **[F1] CLIPBOARD PRESERVED (critical):** put a known value on the clipboard (copy a password), do a full
+  review→Apply, then paste (`Ctrl+V`) elsewhere → the **original value must still be there**. Repeat with
+  review→`Esc` (cancel) → original clipboard still intact. This is the CRITICAL fold; verify it explicitly.
+- **[F3] Wrong-window guard:** open the card, close the source app, press Apply → the result must NOT be
+  pasted anywhere random; it should land on the clipboard with a warning logged (grep `could not refocus`).
+- **[F9] Re-entrancy:** with the card open, press `Ctrl+Shift+J` again → no second card, source unchanged.
+- **[F5] Kill-switch on the DEFAULT backend:** confirm `keyboard_implementation` is HandyKeys (the Windows
+  default), toggle `selection_review_enabled` **off** → hotkey no longer fires. Toggle on → fires. Rebinding works.
+- Grep the debug log for `Review-selection hotkey fired` and `apply_review_result: refocused=true` to
+  confirm fire + refocus actually happened (silent-async-panic + focus gotchas).
 
-**Step 3:** Run full test + lint gate: `cargo test --lib` (all pass incl. new), `tsc --noEmit`,
-`eslint`, `prettier --check`. Fix anything red.
+**Step 3:** Run full test + lint gate: `cargo test --lib` (all pass incl. the **6** overlay_pos tests +
+the defaults test), `tsc --noEmit`, `eslint`, `prettier --check`. Fix anything red.
 
-**Step 4:** Finish Phase A per superpowers:finishing-a-development-branch (merge to main or open PR —
-following AGENTS.md's PR template if a PR). **Phase A is independently shippable.**
+**Step 4: [F15]** Finish Phase A per superpowers:finishing-a-development-branch. **Phase A is shippable
+ONLY after F1 (clipboard preservation) is verified green in Step 2** — a v1 that eats the clipboard on
+every use is not shippable. The AI chips are intentionally inert until Phase B; that's an acceptable v1.
 
 ---
 
@@ -621,10 +882,26 @@ following AGENTS.md's PR template if a PR). **Phase A is independently shippable
 
 **Files:** `src-tauri/Cargo.toml`; a throwaway `examples/llama_smoke.rs`.
 
-**Step 1:** `cargo add llama-cpp-2` (utilityai crate — tracks upstream, static-links GGML). Confirm it
-reuses/does-not-conflict-with the existing GGML from `transcribe-cpp`.
+**Step 1: [F14]** Add the dep **optional + behind a default-OFF feature** so plain `cargo test`/CI never
+builds the C++ inference stack. `cargo add` alone adds a NON-optional dep — do it by hand:
+```toml
+[dependencies]
+llama-cpp-2 = { version = "*", optional = true }   # pin the real version
 
-**Step 2:** Write a tiny example that loads a small GGUF and generates 10 tokens from a fixed prompt.
+[features]
+local-llm = ["dep:llama-cpp-2"]
+```
+Confirm it does not conflict with the existing GGML from `transcribe-cpp`.
+
+**Step 2:** Write the smoke example **gated to the feature** so `cargo test` (which compiles examples)
+doesn't drag it in:
+```toml
+[[example]]
+name = "llama_smoke"
+required-features = ["local-llm"]
+```
+The example loads a small GGUF and generates 10 tokens from a fixed prompt. Build it explicitly with
+`cargo run --example llama_smoke --features local-llm`.
 
 **Step 3:** Build with `CARGO_TARGET_DIR="C:/dtfb"`. Expected: compiles + links (this is the real risk).
 If it fails (GGML symbol clash / CMake), STOP and report — resolve before proceeding.
