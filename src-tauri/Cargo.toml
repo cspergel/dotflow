@@ -87,6 +87,17 @@ hf-hub = { git = "https://github.com/cjpais/hf-hub", branch = "cancellable-downl
   "tokio",
 ] }
 harper-core = "2.5.0"
+# De-risking spike (feature-gated, optional): prove llama-cpp-2 compiles/links alongside
+# transcribe-cpp's GGML. NOT wired into the app; NOT a default dep.
+llama-cpp-2 = { version = "*", optional = true }
+
+[features]
+# Spike-only feature; keeps llama-cpp-2 out of default/CI builds.
+local-llm = ["dep:llama-cpp-2"]
+
+[[example]]
+name = "llama_smoke"
+required-features = ["local-llm"]
 
 [target.'cfg(unix)'.dependencies]
 signal-hook = "0.3"
