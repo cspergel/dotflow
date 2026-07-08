@@ -64,7 +64,14 @@ fn backend() -> Result<&'static LlamaBackend, String> {
         .ok_or_else(|| "llama backend unavailable after init".to_string())
 }
 
-/// CPU-only load: keep every layer on the CPU so we don't contend with the GPU whisper backend.
+/// How many model layers to offload to the GPU when loading a GGUF.
+///
+/// The default (CPU) build keeps every layer on the CPU (`0`) so it doesn't contend with the GPU
+/// whisper backend. The `cuda` feature (via `local-llm-cuda`) offloads all layers to the GPU — `999`
+/// is llama.cpp's idiomatic "all layers" sentinel (it's clamped to the model's real layer count).
+#[cfg(feature = "cuda")]
+const N_GPU_LAYERS: u32 = 999;
+#[cfg(not(feature = "cuda"))]
 const N_GPU_LAYERS: u32 = 0;
 
 /// A loaded GGUF plus the inputs that determined how it was loaded, so we can tell whether a cached
