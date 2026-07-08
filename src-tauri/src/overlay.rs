@@ -517,6 +517,16 @@ pub fn show_review_overlay(
     let monitor = get_monitor_with_cursor(app_handle);
     let scale = monitor.as_ref().map(|m| m.scale_factor()).unwrap_or(1.0);
     let (pcx, pcy) = input::get_cursor_position(app_handle).unwrap_or((0, 0));
+    // On macOS enigo returns LOGICAL points already (see get_monitor_with_cursor above), so we use the
+    // cursor coordinates directly — dividing by scale again would double-divide and misplace the card on
+    // Retina displays. Only the cursor is affected; the monitor bounds below are physical on both
+    // platforms and are correctly divided.
+    #[cfg(target_os = "macos")]
+    let cursor = (pcx as f64, pcy as f64);
+    // Dividing by scale is correct ONLY because the Windows app is PerMonitorV2 DPI-aware, so enigo's
+    // get_cursor_position returns PHYSICAL px. If that awareness ever regressed, enigo would start
+    // returning logical px and this would double-divide (mirrors the macOS branch's hazard, inverted).
+    #[cfg(not(target_os = "macos"))]
     let cursor = (pcx as f64 / scale, pcy as f64 / scale);
 
     let work = match monitor.as_ref() {
@@ -566,6 +576,9 @@ pub fn show_review_overlay(
     // so Enter/Esc/arrows work without a click.
     #[cfg(target_os = "windows")]
     if let Ok(hwnd) = win.hwnd() {
+        // NOTE: this runs off the UI/window-owning thread (show_review_overlay is called from a spawned
+        // worker), which is a known reliability caveat for the AttachThreadInput dance inside
+        // force_foreground — to be validated in the Task A11 "keyboard-first without a click" exercise.
         crate::input::force_foreground(hwnd.0 as isize);
     }
     let _ = win.set_focus();
