@@ -203,6 +203,16 @@ pub fn generate_chat(
 /// Qwen2.5 test model — when the model ships no template or applying it fails. Returns the prompt plus
 /// the `AddBos` policy: the built-in template owns any BOS (so `Never`), while the bare ChatML fallback
 /// defers to the tokenizer config (`Always`), matching [`generate`].
+/// True if `marker` is a single control/special token in this model's vocab (e.g. Gemma's
+/// `<start_of_turn>`). Used to pick the right chat template when the model's baked-in template can't be
+/// rendered by llama.cpp's built-in applier.
+fn has_control_token(model: &LlamaModel, marker: &str) -> bool {
+    model
+        .str_to_token(marker, AddBos::Never)
+        .map(|t| t.len() == 1)
+        .unwrap_or(false)
+}
+
 fn build_chat_prompt(model: &LlamaModel, system: &str, user: &str) -> (String, AddBos) {
     let messages = [
         LlamaChatMessage::new("system".to_string(), system.to_string()),
@@ -217,6 +227,21 @@ fn build_chat_prompt(model: &LlamaModel, system: &str, user: &str) -> (String, A
             }
         }
     }
+    // Gemma-family fallback. Gemma's jinja template isn't rendered by llama.cpp's built-in applier, and
+    // Gemma does NOT understand ChatML — fed `<|im_end|>` it emits that marker as literal text and never
+    // stops (its EOG is `<end_of_turn>`, a real token). So use Gemma's own turn markers. Gemma has no
+    // system role, so fold the system instruction into the user turn.
+    if has_control_token(model, "<start_of_turn>") {
+        let content = if system.trim().is_empty() {
+            user.to_string()
+        } else {
+            format!("{system}\n\n{user}")
+        };
+        return (
+            format!("<start_of_turn>user\n{content}<end_of_turn>\n<start_of_turn>model\n"),
+            AddBos::Always,
+        );
+    }
     // ChatML fallback (Qwen-style). parse_special=true in str_to_token turns these markers into real
     // special tokens, so this is a valid prompt even though it's assembled as plain text.
     (
@@ -225,6 +250,25 @@ fn build_chat_prompt(model: &LlamaModel, system: &str, user: &str) -> (String, A
         ),
         AddBos::Always,
     )
+}
+
+/// Trim trailing chat/control markers a model may emit as literal text (e.g. a mismatched-template
+/// `<|im_end|>`) so the returned result is clean. Cuts from the first such marker onward.
+fn clean_chat_output(s: &str) -> String {
+    let mut end = s.len();
+    for marker in [
+        "<|im_end|>",
+        "<end_of_turn>",
+        "<|im_start|>",
+        "<eos>",
+        "</s>",
+        "<|endoftext|>",
+    ] {
+        if let Some(pos) = s.find(marker) {
+            end = end.min(pos);
+        }
+    }
+    s[..end].trim().to_string()
 }
 
 fn generate_chat_inner(
@@ -237,6 +281,7 @@ fn generate_chat_inner(
         let (prompt, add_bos) = build_chat_prompt(model, system, user);
         run_generation(backend, model, &prompt, add_bos, max_new_tokens)
     })
+    .map(|s| clean_chat_output(&s))
 }
 
 fn generate_inner(
