@@ -25,46 +25,74 @@ license must be clean.
 1. **Term source:** curated **in-house** list we own outright (~2–5k high-value terms). Zero license risk,
    ships fast, grows over time. (Rejected: `hunspell-en-med-glut` — license likely copyleft, risky under a
    proprietary SKU; public-domain NLM/RxNorm — more assembly, deferred as a later scale-up source.)
-2. **Packaging:** **bundle** the list into the binary (`include_str!`). It's tiny; no download-on-demand.
+2. **Packaging — RUNTIME-LOADABLE (revised 2026-07-08).** Packs are **external `.txt` files** discovered at
+   runtime in `%APPDATA%/com.dotflow.app/dictionaries/`. The default **medical** pack ships as a bundled Tauri
+   **resource** and is **seeded** into that dir on first run (only if absent — never overwrites user edits).
+   Users can drop in / (later) download additional packs with **no rebuild** — matching the sell-packs-as-
+   add-ons commercial model. (Supersedes the earlier `include_str!`-bundled-only decision.)
 3. **v1 scope:** **acceptance-only (safe).** Valid terms stop being flagged; medical terms are **never
    silently auto-applied** as corrections (filtered out of the `harper_cleanup` auto-fix path). They may
    still surface in the human-reviewed Review panel. Eliminates any wrong-drug silent-correction risk.
-4. **Architecture:** a **generic pack registry** (`{id, label, terms}`), shipping **only** the medical pack
-   now. Adding legal later = one term file + one registry entry, no schema change.
+4. **Architecture:** a **generic pack registry** built by **scanning the dictionaries dir** — one `.txt` file
+   = one pack (id = filename stem). Adding legal later = drop a `legal.txt` in the folder, no code change.
 5. **Toggle location:** Settings → Cleanup (where Harper engine settings already live; packs affect every
-   Harper path).
+   Harper path). Include an "Open dictionaries folder" affordance and a "Reload packs" action.
+
+> **Runtime-loadable delta.** External files are **untrusted input** (user-editable, possibly malformed or
+> huge). New robustness obligations, folded into §1/§2/§4 and marked `[LOAD-Fn]`: per-file parse isolation (a
+> bad file skips itself, never crashes the app or breaks other packs), a size/term cap (no OOM), UTF-8-lossy
+> read, and the [SWEEP-F7] degrade-to-curated guarantee now applies **per pack**. Content can change between
+> runs, so the cache also reloads on explicit user action (toggle / Reload), not only at startup — a bad
+> hand-edit is recoverable without a reinstall. This new loading/seeding surface should get a focused
+> re-sweep before implementation.
 
 ## Section 1 — Data model & flow
 
 New module `src-tauri/src/dotflow/dictionary_packs.rs`:
 
 ```rust
-pub struct DictionaryPack { pub id: &'static str, pub label: &'static str, pub terms: &'static str }
-pub static PACKS: &[DictionaryPack] = &[DictionaryPack {
-    id: "medical", label: "Medical",
-    terms: include_str!("../../resources/dictionaries/medical.txt"),
-}];
+pub struct DictionaryPack { pub id: String, pub label: String, pub path: PathBuf }
+
+/// Seed bundled defaults (only if absent), then discover every *.txt in the dictionaries dir.
+pub fn discover_packs(dir: &Path) -> Vec<DictionaryPack>;   // id = filename stem, label = titlecased id
+fn seed_defaults(dir: &Path);                               // copy resources/dictionaries/medical.txt if missing
 ```
 
-- Term list: `src-tauri/resources/dictionaries/medical.txt`, one term per line, `#` comments allowed,
-  compiled in via `include_str!`. No runtime file, no network.
-- Settings (`settings.rs`): add `enabled_dictionary_packs: Vec<String>`, default `[]` (opt-in, OFF).
+- **Dictionaries dir:** `%APPDATA%/com.dotflow.app/dictionaries/` (resolve via Tauri path API, not a hardcoded
+  string). Created on first run.
+- **Seeding [LOAD-seed]:** the default `medical.txt` ships as a Tauri **resource** (`resources/dictionaries/
+  medical.txt`, listed in `tauri.conf.json` `bundle.resources`). On startup, `seed_defaults` copies it into
+  the dir **only if a file of that name does not already exist** — so a user who edits/curates their medical
+  pack is never clobbered by an update.
+- **Discovery:** scan the dir for `*.txt` (ignore other files, dotfiles, subdirs). Each file → a pack; `id` =
+  lowercased filename stem (`medical.txt` → `medical`); `label` = titlecased id. Duplicate/ill-formed names
+  are de-duped by id (first wins) + logged.
+- **File format:** one term per line; `# …` comment lines and blank lines skipped; an optional first-line
+  `# label: Medical Terminology` overrides the derived label. UTF-8, read **lossy** [LOAD-F-enc].
+- **[LOAD-F-iso] Per-file isolation + caps:** each file is read/parsed independently inside a `Result`/
+  `catch_unwind`; a file that is unreadable, invalid, exceeds a **size cap** (e.g. 8 MB) or **term cap**
+  (e.g. 500k) is **skipped with a warning** and does **not** disable other packs or crash the app.
+- Settings (`settings.rs`): add `enabled_dictionary_packs: Vec<String>`, default `[]` (opt-in, OFF). Enabled
+  ids that no longer correspond to a discovered file are simply ignored (stale-toggle tolerant).
 - Process-wide cached dictionary: `Mutex<Option<CachedDict>>` keyed on the sorted enabled-pack-id set.
   `CachedDict` holds the `Arc<dyn Dictionary>` **and** the lowercase pack-term `HashSet` (used by the safety
   filter — built once alongside the FST). `set_enabled_packs(&[String])` (called at startup + on every
   settings change) rebuilds once; `current_dictionary() -> Arc<dyn Dictionary>` returns curated-only when
   nothing is enabled, else a `MergedDictionary(curated + pack FST)`.
-- **[SWEEP-F7] Build outside the lock; degrade, never wedge.** `set_enabled_packs` builds the new
-  `FstDictionary` into a **local**, then takes the lock only to swap the `Arc` — so a concurrent
-  `current_dictionary()` never blocks for the FST build. If the build **panics or errors** (e.g. a malformed
-  pack term), fall back to **curated-only + log a warning** rather than leaving the cache `None`/poisoned —
-  because pack content is `include_str!`-fixed for the binary's life, a re-build-on-`None` would re-panic
-  every call and silently disable *all* linting. `current_dictionary()` on the read path **only clones the
-  cached `Arc`** — it never re-reads settings and never builds. Poison recovery (`.unwrap_or_else(|p|
-  p.into_inner())`, as in `local_llm.rs:112`) is replicated verbatim at every lock site.
-- Flow: settings change → command updates store + calls `set_enabled_packs` → cache rebuilds (build-then-swap)
-  → `grammar::analyze` / `harper_cleanup` snapshot `current_dictionary()` **once** at the top and use it for
-  **both** the linter (`LintGroup::new_curated`) **and** the Document parse (see [SWEEP-F1] in §2).
+- **[SWEEP-F7 + LOAD-F-iso] Build outside the lock; degrade per pack, never wedge.** `set_enabled_packs`
+  builds the merged `FstDictionary` into a **local**, then takes the lock only to swap the `Arc` — so a
+  concurrent `current_dictionary()` never blocks for the FST build. Each enabled pack is folded in
+  independently: a pack whose file fails to read/parse/build (panic or error) is **skipped with a warning**
+  and the merge continues with curated + the packs that did build. The result is **never** left
+  `None`/poisoned — worst case is curated-only. `current_dictionary()` on the read path **only clones the
+  cached `Arc`** — it never re-reads settings, re-scans the dir, or builds. Poison recovery
+  (`.unwrap_or_else(|p| p.into_inner())`, as in `local_llm.rs:112`) is replicated at every lock site.
+- **Reload semantics:** the cache is rebuilt at startup, on a pack **toggle**, and on an explicit **Reload
+  packs** action (which also re-runs discovery). Editing a `.txt` on disk takes effect on the next
+  reload/restart — no live file-watcher in v1 (documented, not silent).
+- Flow: settings change / reload → command re-discovers packs + calls `set_enabled_packs` → cache rebuilds
+  (build-then-swap) → `grammar::analyze` / `harper_cleanup` snapshot `current_dictionary()` **once** at the
+  top and use it for **both** the linter (`LintGroup::new_curated`) **and** the Document parse ([SWEEP-F1]).
 
 ## Section 2 — Harper integration + acceptance-only safety filter
 
@@ -117,20 +145,27 @@ Two consumers, two behaviors — **this is the safety design**:
 
 ## Section 3 — Commands, bindings & UI
 
-Commands (`commands/dictionary.rs` or fold into `cleanup.rs`):
+Commands (`commands/dictionary.rs`):
 
 ```rust
-get_dictionary_packs(app) -> Vec<DictionaryPackInfo>   // {id, label, enabled}
+get_dictionary_packs(app) -> Vec<DictionaryPackInfo>   // {id, label, enabled, term_count}, from dir scan
 set_dictionary_pack_enabled(app, id: String, enabled: bool) -> Result<(), String>
+reload_dictionary_packs(app) -> Vec<DictionaryPackInfo> // re-scan dir + rebuild cache (picks up dropped/edited files)
+open_dictionaries_folder(app) -> Result<(), String>     // reveal %APPDATA%/…/dictionaries in the file manager
 ```
 
-- `set_dictionary_pack_enabled` writes the store then calls `set_enabled_packs` → live rebuild, no restart.
-- Startup (`lib.rs`): call `set_enabled_packs` once from persisted settings before first cleanup.
+- `get_dictionary_packs` runs `seed_defaults` (first-run) then `discover_packs`, cross-referencing the
+  settings enabled set. `set_dictionary_pack_enabled` writes the store then calls `set_enabled_packs` → live
+  rebuild, no restart. `reload_dictionary_packs` re-discovers (for a file the user just dropped in / edited).
+- Startup (`lib.rs`): seed defaults, then call `set_enabled_packs` once from persisted settings before first
+  cleanup.
 - Hand-add commands + `DictionaryPackInfo` to `src/bindings.ts` (bindings only regenerate on app run).
-- UI: new "Dictionaries" subsection in `CleanupSettings.tsx`, one toggle row per pack from
-  `get_dictionary_packs`, short description. i18n keys → `en/translation.json` + propagated to all 21
-  locales (translation-completeness CI check).
-- **Out of scope (YAGNI):** per-term user editing, custom user dictionary UI, legal pack content.
+- UI: new "Dictionaries" subsection in `CleanupSettings.tsx` — one toggle row per discovered pack (label +
+  term count), an **Open dictionaries folder** button and a **Reload** button, plus a one-line hint that
+  users can drop their own `.txt` term lists in the folder. i18n keys → `en/translation.json` + propagated to
+  all 21 locales (translation-completeness CI check).
+- **Out of scope (YAGNI):** per-term in-app editing, pack download/marketplace UI, license-gating, legal pack
+  content, live file-watching (Reload button covers it).
 
 ## Section 4 — Testing (charter: tests must have teeth)
 
@@ -162,6 +197,18 @@ and a must-not-regress case.
    (assert a word from a comment is absent from `current_dictionary()`); trailing whitespace / blank lines
    yield clean entries; duplicate term doesn't panic the FST build; **empty pack file** builds without panic
    and behaves as pack-off; a term already in curated (`tachycardia`) doesn't double-flag or panic.
+6. **[LOAD] Discovery + seeding (both states).** Given a temp dir: `discover_packs` finds a `medical.txt` as
+   pack id `medical`, ignores non-`.txt` files/dotfiles/subdirs. `seed_defaults` **creates** `medical.txt`
+   when absent, and **does NOT overwrite** an existing file whose contents differ (write a sentinel term,
+   seed, assert the sentinel survives) — the never-clobber-user-edits guarantee.
+7. **[LOAD-F-iso] Bad-file isolation (teeth).** A dir with a good `medical.txt` and a **malformed** pack
+   (e.g. a huge/over-cap file, or invalid bytes): building the merged dict **skips the bad file with a
+   warning**, still accepts terms from `medical.txt`, and never panics or returns curated-only-because-of-the-
+   bad-one. Removing the isolation (letting the bad file into the build) must make this test fail — that's the
+   canary that the degrade-per-pack guard has teeth.
+8. **[LOAD] Reload picks up a newly dropped file.** After `set_enabled_packs(["legal"])` with no `legal.txt`
+   present (no-op, tolerated), drop a `legal.txt` with a term, call the reload path, enable it → the term is
+   now accepted. Proves discovery is re-run, not cached from startup.
 
 **Verification before done:** `cargo test --lib` (new + existing 188), then live — toggle the pack in the
 running app and confirm a real clinical sentence stops underlining **and** that a sentence-initial drug-name
