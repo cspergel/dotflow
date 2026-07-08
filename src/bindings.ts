@@ -387,6 +387,17 @@ async cancelReview() : Promise<null> {
 async getPendingReview() : Promise<[string, boolean] | null> {
     return await TAURI_INVOKE("get_pending_review");
 },
+async aiTransform(text: string, action: string) : Promise<Result<string, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("ai_transform", { text, action }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async aiTransformAvailable() : Promise<boolean> {
+    return await TAURI_INVOKE("ai_transform_available");
+},
 async changeAppLanguageSetting(language: string) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("change_app_language_setting", { language }) };
@@ -990,7 +1001,14 @@ experimental_typed_expander?: boolean; typed_expander_sound?: boolean; clipboard
  * not gated on this — that follows model capability. Migrated from the old
  * `overlay_position` (position `none` → style `None`).
  */
-overlay_style?: OverlayStyle }
+overlay_style?: OverlayStyle;
+/**
+ * DotFlow: absolute path to a local GGUF instruct model used for the offline "AI transform" actions
+ * (the review overlay's Rewrite / Formal / Summarize chips) when no cloud/Ollama post-processor is
+ * configured. Empty = no local model set (the AI chips then require a cloud backend). Only consulted
+ * in builds compiled with the `local-llm` feature. Set via the store; no in-app editor yet.
+ */
+local_llm_model_path?: string }
 export type AudioDevice = { index: string; name: string; is_default: boolean }
 export type AutoSubmitKey = "enter" | "ctrl_enter" | "cmd_enter"
 export type AvailableAccelerators = { transcribe: string[]; ort: string[]; gpu_devices: GpuDeviceOption[] }

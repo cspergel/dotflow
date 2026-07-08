@@ -467,6 +467,12 @@ pub struct AppSettings {
     /// `overlay_position` (position `none` → style `None`).
     #[serde(default = "default_overlay_style")]
     pub overlay_style: OverlayStyle,
+    /// DotFlow: absolute path to a local GGUF instruct model used for the offline "AI transform" actions
+    /// (the review overlay's Rewrite / Formal / Summarize chips) when no cloud/Ollama post-processor is
+    /// configured. Empty = no local model set (the AI chips then require a cloud backend). Only consulted
+    /// in builds compiled with the `local-llm` feature. Set via the store; no in-app editor yet.
+    #[serde(default)]
+    pub local_llm_model_path: String,
 }
 
 fn default_model() -> String {
@@ -949,6 +955,7 @@ pub fn get_default_settings() -> AppSettings {
         extra_recording_buffer_ms: 0,
         vad_enabled: default_vad_enabled(),
         overlay_style: default_overlay_style(),
+        local_llm_model_path: String::new(),
     }
 }
 

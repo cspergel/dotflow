@@ -2,10 +2,11 @@
  * Selection-review overlay card.
  *
  * A focusable, draggable card the review hotkey pops near the cursor. It shows the offline Proofread
- * review (Harper, via ReviewPanel) plus AI action chips (Rewrite / Formal / Summarize) that stay disabled
- * until AI is configured — their real behaviour lands in Phase B. Apply pastes the reviewed result back
- * into the source field; Copy puts it on the clipboard; Close cancels; clicking away dismisses it. The
- * window sizes itself to the card's content and is not forced always-on-top.
+ * review (Harper, via ReviewPanel) plus AI action chips (Rewrite / Formal / Summarize) that call the
+ * `ai_transform` backend command (cloud/Ollama post-processor, else a local offline GGUF model) and show a
+ * before→after result. The chips stay disabled until an AI backend is available. Apply pastes the reviewed
+ * result back into the source field; Copy puts it on the clipboard; Close cancels; clicking away dismisses
+ * it. The window sizes itself to the card's content and is not forced always-on-top.
  */
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
@@ -41,6 +42,12 @@ const ReviewOverlay: React.FC = () => {
   const [aiAvailable, setAiAvailable] = useState(false);
   const [activeAction, setActiveAction] = useState<ReviewAction>("proofread");
   const [reviewResult, setReviewResult] = useState("");
+  // AI-transform (Rewrite / Formal / Summarize) state. `aiResult` is the model's output; it's mirrored
+  // into `reviewResult` so Apply/Copy use it. `aiRetryNonce` re-triggers the run when the user hits Retry.
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError] = useState<string | null>(null);
+  const [aiResult, setAiResult] = useState("");
+  const [aiRetryNonce, setAiRetryNonce] = useState(0);
   const cardRef = useRef<HTMLDivElement>(null);
   // Timestamp until which a focus-loss must NOT close the card. Starting a native window drag
   // (data-tauri-drag-region → startDragging) briefly blurs the window; without this grace window the
@@ -60,6 +67,9 @@ const ReviewOverlay: React.FC = () => {
       setAiAvailable(ai);
       setActiveAction("proofread");
       setReviewResult("");
+      setAiResult("");
+      setAiError(null);
+      setAiLoading(false);
     };
 
     const setup = async () => {
@@ -74,6 +84,9 @@ const ReviewOverlay: React.FC = () => {
         setText("");
         setReviewResult("");
         setActiveAction("proofread");
+        setAiResult("");
+        setAiError(null);
+        setAiLoading(false);
       });
 
       if (cancelled) {
@@ -108,6 +121,45 @@ const ReviewOverlay: React.FC = () => {
   const handleClose = useCallback(async () => {
     await commands.cancelReview();
   }, []);
+
+  // Run the AI transform whenever an AI action becomes active (or Retry bumps the nonce). Proofread is
+  // offline and handled by ReviewPanel, so it clears any AI state and does nothing here. The `cancelled`
+  // guard drops a stale in-flight result if the user switches actions before it resolves.
+  useEffect(() => {
+    if (activeAction === "proofread") {
+      setAiLoading(false);
+      setAiError(null);
+      setAiResult("");
+      return;
+    }
+    if (!text.trim()) return;
+
+    let cancelled = false;
+    setAiLoading(true);
+    setAiError(null);
+    setAiResult("");
+    void commands
+      .aiTransform(text, activeAction)
+      .then((res) => {
+        if (cancelled) return;
+        if (res.status === "ok") {
+          setAiResult(res.data);
+          setReviewResult(res.data);
+        } else {
+          setAiError(res.error);
+        }
+      })
+      .catch((e: unknown) => {
+        if (!cancelled) setAiError(e instanceof Error ? e.message : String(e));
+      })
+      .finally(() => {
+        if (!cancelled) setAiLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeAction, text, aiRetryNonce]);
 
   // Window-level keyboard: Enter → Apply, Escape → Close. Enter is ignored while a button inside the card
   // is focused so it can't hijack ReviewPanel's accept-a-suggestion buttons.
@@ -241,9 +293,40 @@ const ReviewOverlay: React.FC = () => {
       <div className="max-h-[360px] overflow-y-auto px-3 py-3 text-sm">
         {activeAction === "proofread" ? (
           <ReviewPanel text={text} onResult={setReviewResult} />
+        ) : aiLoading ? (
+          <div className="flex items-center justify-center gap-2 rounded-lg border border-hairline bg-panel px-3 py-6 text-sm text-muted">
+            <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-hairline-strong border-t-accent" />
+            {t("settings.review.working", "Working…")}
+          </div>
+        ) : aiError ? (
+          <div className="space-y-2 rounded-lg border border-hairline bg-panel px-3 py-3 text-sm">
+            <div className="text-red-500">{aiError}</div>
+            <button
+              type="button"
+              onClick={() => setAiRetryNonce((n) => n + 1)}
+              className="rounded-md border border-hairline-strong px-2.5 py-1 text-xs font-medium text-text hover:bg-inset"
+            >
+              {t("settings.review.retry", "Retry")}
+            </button>
+          </div>
         ) : (
-          <div className="rounded-lg border border-hairline bg-panel px-3 py-6 text-center text-sm text-muted">
-            {t("settings.review.comingSoon", "AI actions coming soon")}
+          <div className="space-y-2.5">
+            <div>
+              <div className="mb-1 text-[10px] font-medium tracking-wide text-faint uppercase">
+                {t("settings.review.before", "Before")}
+              </div>
+              <div className="rounded-lg border border-hairline bg-panel px-3 py-2 text-sm whitespace-pre-wrap text-muted">
+                {text}
+              </div>
+            </div>
+            <div>
+              <div className="mb-1 text-[10px] font-medium tracking-wide text-faint uppercase">
+                {t("settings.review.after", "After")}
+              </div>
+              <div className="rounded-lg border border-hairline-strong bg-panel px-3 py-2 text-sm whitespace-pre-wrap text-text">
+                {aiResult}
+              </div>
+            </div>
           </div>
         )}
       </div>

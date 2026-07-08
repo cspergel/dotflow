@@ -103,6 +103,10 @@ required-features = ["local-llm"]
 name = "llama_generate"
 required-features = ["local-llm"]
 
+[[example]]
+name = "ai_transform_smoke"
+required-features = ["local-llm"]
+
 [target.'cfg(unix)'.dependencies]
 signal-hook = "0.3"
 

@@ -909,6 +909,28 @@ async fn cleanup_with_llm(settings: &AppSettings, input: &str) -> Option<String>
     post_process_transcription(&s, input).await
 }
 
+/// Run the currently-configured post-process LLM over `input` with an arbitrary per-action `system_prompt`
+/// (the review overlay's Rewrite / Formal / Summarize actions). Like [`cleanup_with_llm`] it reuses the
+/// proven `post_process_transcription` plumbing via a settings CLONE, so the dictation post-process path is
+/// untouched. The `${output}` suffix is what the legacy (non-structured-output) providers substitute the
+/// text into; the structured-output path strips it and sends `input` as the user message. Returns `None`
+/// when no provider/model/prompt is configured or the call yields nothing.
+pub(crate) async fn ai_transform_with_llm(
+    settings: &AppSettings,
+    system_prompt: &str,
+    input: &str,
+) -> Option<String> {
+    let mut s = settings.clone();
+    let id = "__dotflow_ai_transform__".to_string();
+    s.post_process_prompts.push(crate::settings::LLMPrompt {
+        id: id.clone(),
+        name: "AI transform".to_string(),
+        prompt: format!("{system_prompt}\n\n${{output}}"),
+    });
+    s.post_process_selected_prompt_id = Some(id);
+    post_process_transcription(&s, input).await
+}
+
 /// Resolve the best available cleanup for `text`: the post-process LLM if one is configured (fuller
 /// grammar/spelling), otherwise the offline Harper grammar pass followed by the deterministic mechanical
 /// tidy. Shared by the cleanup hotkey and the in-app "Try it" preview so they behave identically.
@@ -1083,7 +1105,7 @@ async fn review_selection(app: &AppHandle) -> Result<(), String> {
         }
     }
 
-    let ai_available = crate::commands::cleanup::post_process_is_configured(app.clone());
+    let ai_available = crate::commands::ai::ai_transform_available(app.clone());
     crate::overlay::show_review_overlay(app, &selected, ai_available)?;
     Ok(())
 }

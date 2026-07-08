@@ -1,3 +1,4 @@
+pub mod ai;
 pub mod audio;
 pub mod cleanup;
 pub mod history;
