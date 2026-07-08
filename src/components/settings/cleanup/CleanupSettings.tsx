@@ -3,8 +3,10 @@ import { useTranslation } from "react-i18next";
 import { SettingsGroup } from "../../ui/SettingsGroup";
 import { SettingContainer } from "../../ui/SettingContainer";
 import { Button } from "../../ui/Button";
+import { ToggleSwitch } from "../../ui/ToggleSwitch";
 import { ShortcutInput } from "../ShortcutInput";
 import { ReviewPanel } from "./ReviewPanel";
+import { useSettings } from "../../../hooks/useSettings";
 import { commands } from "@/bindings";
 
 // DotFlow: the Text Cleanup section — the home for the "clean up selected text" hotkey and (soon) its
@@ -12,6 +14,8 @@ import { commands } from "@/bindings";
 // cleanup pipeline the hotkey uses, so it can be used/verified without the global hotkey.
 export const CleanupSettings: React.FC = () => {
   const { t } = useTranslation();
+  const { getSetting, updateSetting, isUpdating } = useSettings();
+  const reviewEnabled = getSetting("selection_review_enabled") ?? true;
   const [aiConfigured, setAiConfigured] = useState(false);
   const [input, setInput] = useState("this is an  test ,it has recieve  erors");
   const [output, setOutput] = useState<string | null>(null);
@@ -99,6 +103,23 @@ export const CleanupSettings: React.FC = () => {
               : t("settings.cleanup.engine.offline", "Offline (Harper)")}
           </span>
         </SettingContainer>
+      </SettingsGroup>
+
+      <SettingsGroup title={t("settings.review.group", "Selection review")}>
+        <ToggleSwitch
+          checked={reviewEnabled}
+          onChange={(v) => updateSetting("selection_review_enabled", v)}
+          isUpdating={isUpdating("selection_review_enabled")}
+          label={t("settings.review.enable", "Selection review overlay")}
+          description={t(
+            "settings.review.enableDesc",
+            "A hotkey opens a floating review card near the cursor to proofread the selected text before pasting it back. Rewrite/Formal/Summarize require an AI provider configured under Post-Processing.",
+          )}
+          grouped={true}
+        />
+        {reviewEnabled && (
+          <ShortcutInput shortcutId="review_selection" grouped={true} />
+        )}
       </SettingsGroup>
 
       <SettingsGroup title={t("settings.cleanup.groups.tryIt", "Try it")}>
