@@ -2,6 +2,7 @@ pub mod ai;
 pub mod audio;
 pub mod cleanup;
 pub mod history;
+pub mod llm;
 pub mod models;
 pub mod phrases;
 pub mod transcription;

@@ -696,6 +696,10 @@ pub fn run(cli_args: CliArgs) {
             commands::cleanup::get_pending_review,
             commands::ai::ai_transform,
             commands::ai::ai_transform_available,
+            commands::llm::list_llm_models,
+            commands::llm::download_llm_model,
+            commands::llm::select_llm_model,
+            commands::llm::delete_llm_model,
             shortcut::change_selection_review_enabled_setting,
             helpers::clamshell::is_laptop,
         ])

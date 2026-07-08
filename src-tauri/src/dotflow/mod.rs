@@ -13,6 +13,7 @@
 pub mod cleanup;
 pub mod field_stream;
 pub mod grammar;
+pub mod llm_catalog;
 #[cfg(feature = "local-llm")]
 pub mod local_llm;
 pub mod overlay_pos;
