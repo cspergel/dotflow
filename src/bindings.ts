@@ -373,6 +373,20 @@ async analyzeText(text: string) : Promise<TextSuggestion[]> {
 async postProcessIsConfigured() : Promise<boolean> {
     return await TAURI_INVOKE("post_process_is_configured");
 },
+async applyReviewResult(text: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("apply_review_result", { text }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async cancelReview() : Promise<null> {
+    return await TAURI_INVOKE("cancel_review");
+},
+async getPendingReview() : Promise<[string, boolean] | null> {
+    return await TAURI_INVOKE("get_pending_review");
+},
 async changeAppLanguageSetting(language: string) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("change_app_language_setting", { language }) };

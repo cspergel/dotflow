@@ -691,6 +691,9 @@ pub fn run(cli_args: CliArgs) {
             commands::cleanup::preview_cleanup,
             commands::cleanup::analyze_text,
             commands::cleanup::post_process_is_configured,
+            commands::cleanup::apply_review_result,
+            commands::cleanup::cancel_review,
+            commands::cleanup::get_pending_review,
             shortcut::change_selection_review_enabled_setting,
             helpers::clamshell::is_laptop,
         ])
