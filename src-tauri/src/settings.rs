@@ -878,9 +878,10 @@ pub fn get_default_settings() -> AppSettings {
         ShortcutBinding {
             id: "review_selection".to_string(),
             name: "Review Selected Text".to_string(),
-            description: "Copies the selected text and opens a floating review card near the cursor \
+            description:
+                "Copies the selected text and opens a floating review card near the cursor \
                 to proofread (offline) or run an AI rewrite before pasting it back."
-                .to_string(),
+                    .to_string(),
             default_binding: default_review_shortcut.to_string(),
             current_binding: default_review_shortcut.to_string(),
         },
