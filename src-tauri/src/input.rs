@@ -208,19 +208,6 @@ pub fn get_foreground_window() -> Option<isize> {
     None
 }
 
-/// Attempt to bring `hwnd` to the foreground with a plain `SetForegroundWindow`. Returns whether the OS
-/// honored the request (often `false` when we are not already foreground — use `force_foreground`).
-#[cfg(target_os = "windows")]
-pub fn set_foreground_window(hwnd: isize) -> bool {
-    use windows::Win32::Foundation::HWND;
-    use windows::Win32::UI::WindowsAndMessaging::SetForegroundWindow;
-    unsafe { SetForegroundWindow(HWND(hwnd as *mut _)).as_bool() }
-}
-#[cfg(not(target_os = "windows"))]
-pub fn set_foreground_window(_hwnd: isize) -> bool {
-    false
-}
-
 /// Reliably bring `target` to the foreground using the AttachThreadInput dance: temporarily attach our
 /// thread's input queue to the current foreground window's thread so the OS lets us call
 /// `SetForegroundWindow`, then detach. Needed because the HandyKeys backend confers no activation rights

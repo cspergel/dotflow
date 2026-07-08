@@ -85,13 +85,16 @@ pub async fn apply_review_result(app: AppHandle, text: String) -> Result<(), Str
                 log::warn!("apply_review_result: paste failed: {e}");
             }
         } else if !refocused {
-            // [F3] Do NOT blind-paste into the wrong window. Leave the result on the clipboard so the
-            // user can paste it manually, and tell them.
-            let _ = app_c.clipboard().write_text(&text);
-            log::warn!(
-                "apply_review_result: could not refocus source — result left on clipboard for manual paste"
-            );
-            return; // skip the original-clipboard restore below: the result IS the clipboard now
+            // [F3] Do NOT blind-paste into the wrong window. If there's a real result, leave it on the
+            // clipboard so the user can paste it manually and tell them, then skip the restore below.
+            // If the result is EMPTY, don't blank the clipboard — fall through to restore the ORIGINAL.
+            if !text.trim().is_empty() {
+                let _ = app_c.clipboard().write_text(&text);
+                log::warn!(
+                    "apply_review_result: could not refocus source — result left on clipboard for manual paste"
+                );
+                return; // skip the original-clipboard restore below: the result IS the clipboard now
+            }
         }
 
         // [F1] restore the user's ORIGINAL clipboard (inject_bulk left the result/selection on it).
