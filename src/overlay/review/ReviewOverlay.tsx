@@ -1,18 +1,25 @@
 /**
  * Selection-review overlay card.
  *
- * A focusable, always-on-top card the review hotkey pops near the cursor. It shows the offline Proofread
+ * A focusable, draggable card the review hotkey pops near the cursor. It shows the offline Proofread
  * review (Harper, via ReviewPanel) plus AI action chips (Rewrite / Formal / Summarize) that stay disabled
  * until AI is configured — their real behaviour lands in Phase B. Apply pastes the reviewed result back
- * into the source field; Copy puts it on the clipboard; Close cancels.
+ * into the source field; Copy puts it on the clipboard; Close cancels; clicking away dismisses it. The
+ * window sizes itself to the card's content and is not forced always-on-top.
  */
 import { listen } from "@tauri-apps/api/event";
-import { useCallback, useEffect, useState } from "react";
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { LogicalSize } from "@tauri-apps/api/dpi";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { commands } from "@/bindings";
 import { ReviewPanel } from "@/components/settings/cleanup/ReviewPanel";
 
 export type ReviewAction = "proofread" | "rewrite" | "formal" | "summarize";
+
+const CARD_WIDTH = 420;
+const CARD_MAX_HEIGHT = 480;
+const CARD_MIN_HEIGHT = 96;
 
 /**
  * Pure chip-gating predicate: Proofread is offline and always available; the AI actions
@@ -34,6 +41,11 @@ const ReviewOverlay: React.FC = () => {
   const [aiAvailable, setAiAvailable] = useState(false);
   const [activeAction, setActiveAction] = useState<ReviewAction>("proofread");
   const [reviewResult, setReviewResult] = useState("");
+  const cardRef = useRef<HTMLDivElement>(null);
+  // Timestamp until which a focus-loss must NOT close the card. Starting a native window drag
+  // (data-tauri-drag-region → startDragging) briefly blurs the window; without this grace window the
+  // click-away-dismiss effect would fire and close the card the instant you grab it to move it.
+  const suppressCloseUntilRef = useRef(0);
 
   // Listeners + pull-on-mount [F11]. The backend emits "review-text" immediately after show(), which can
   // race this effect's listener registration, so we also PULL the stored payload via getPendingReview();
@@ -114,6 +126,47 @@ const ReviewOverlay: React.FC = () => {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [handleApply, handleClose]);
 
+  // Size the window to the card's content so it doesn't cover more of the screen than it needs (a fixed
+  // 420x340 box left a lot of dead space and obscured text). Capped at CARD_MAX_HEIGHT; the body scrolls
+  // beyond that. Runs on every content change via ResizeObserver.
+  useEffect(() => {
+    const el = cardRef.current;
+    if (!el) return;
+    const win = getCurrentWebviewWindow();
+    const fit = () => {
+      const h = Math.min(
+        Math.max(Math.ceil(el.scrollHeight), CARD_MIN_HEIGHT),
+        CARD_MAX_HEIGHT,
+      );
+      void win.setSize(new LogicalSize(CARD_WIDTH, h)).catch(() => {});
+    };
+    const ro = new ResizeObserver(fit);
+    ro.observe(el);
+    fit();
+    return () => ro.disconnect();
+  }, []);
+
+  // Click-away dismiss: when the card loses focus (user clicked another window/app), close it — so it's
+  // not "always in front no matter what". Guarded by `hadFocus` so the initial show (before force_foreground
+  // grants focus) can't self-close. Dragging/clicking chips stays within the window and doesn't blur it.
+  useEffect(() => {
+    const win = getCurrentWebviewWindow();
+    let hadFocus = false;
+    let unlisten: (() => void) | undefined;
+    void win
+      .onFocusChanged(({ payload: focused }) => {
+        if (focused) {
+          hadFocus = true;
+        } else if (hadFocus && Date.now() >= suppressCloseUntilRef.current) {
+          void commands.cancelReview();
+        }
+      })
+      .then((u) => {
+        unlisten = u;
+      });
+    return () => unlisten?.();
+  }, []);
+
   const aiHint = t(
     "settings.review.aiHint",
     "Configure AI in Settings → Cleanup",
@@ -156,15 +209,36 @@ const ReviewOverlay: React.FC = () => {
   };
 
   return (
-    <div className="font-sans flex h-screen w-screen flex-col overflow-hidden rounded-xl border border-hairline-strong bg-panel text-text">
+    <div
+      ref={cardRef}
+      className="font-sans flex w-screen flex-col overflow-hidden rounded-xl border border-hairline-strong bg-panel text-text"
+    >
+      {/* Drag handle — grab here to move the card (the window steals focus, so this needs an explicit
+          drag region). Interactive children below aren't drag regions, so they still click normally. */}
+      <div
+        data-tauri-drag-region
+        onMouseDown={() => {
+          // Grab-to-move: suppress click-away-dismiss for ~1.2s so the drag's transient blur doesn't close it.
+          suppressCloseUntilRef.current = Date.now() + 1200;
+        }}
+        className="flex cursor-move items-center justify-between border-b border-hairline px-3 py-1.5 select-none"
+      >
+        <span
+          data-tauri-drag-region
+          className="text-[11px] font-medium tracking-wide text-muted"
+        >
+          {t("settings.review.title", "Review")}
+        </span>
+      </div>
+
       {/* Chip row */}
-      <div className="flex flex-wrap items-center gap-1.5 border-b border-hairline px-3 pt-3 pb-2.5">
+      <div className="flex flex-wrap items-center gap-1.5 border-b border-hairline px-3 pt-2.5 pb-2.5">
         {renderChip("proofread")}
         {AI_ACTIONS.map(renderChip)}
       </div>
 
-      {/* Body — scrolls internally so the card keeps its fixed size */}
-      <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3 text-sm">
+      {/* Body — grows with content up to CARD_MAX_HEIGHT, then scrolls internally. */}
+      <div className="max-h-[360px] overflow-y-auto px-3 py-3 text-sm">
         {activeAction === "proofread" ? (
           <ReviewPanel text={text} onResult={setReviewResult} />
         ) : (

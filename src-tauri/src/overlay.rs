@@ -482,7 +482,9 @@ pub fn create_review_overlay(app_handle: &AppHandle) {
     .minimizable(false)
     .closable(false)
     .decorations(false)
-    .always_on_top(true)
+    // NOT always-on-top: the card shows focused (force_foreground below) so it's on top while in use,
+    // but must not force itself in front of everything once the user moves on — clicking away dismisses
+    // it (onFocusChanged in ReviewOverlay.tsx). always_on_top read as obtrusive ("in front no matter what").
     .skip_taskbar(true)
     .transparent(true)
     .focusable(true) // KEY difference vs the recording overlay: the card takes keyboard focus.
@@ -550,6 +552,11 @@ pub fn show_review_overlay(
         work,
     );
 
+    log::info!(
+        "show_review_overlay: cursor=({pcx},{pcy}) scale={scale} -> logical card at ({x:.0},{y:.0}); {} chars",
+        text.chars().count()
+    );
+
     let _ = win.set_size(tauri::Size::Logical(tauri::LogicalSize {
         width: REVIEW_WIDTH,
         height: REVIEW_HEIGHT,
@@ -568,10 +575,6 @@ pub fn show_review_overlay(
 
     let _ = win.show();
 
-    // On Windows, re-assert topmost Z-order after showing (mirrors the recording overlay).
-    #[cfg(target_os = "windows")]
-    force_overlay_topmost(&win);
-
     // [F2] the default HandyKeys backend confers NO activation rights; force our card to the foreground
     // so Enter/Esc/arrows work without a click.
     #[cfg(target_os = "windows")]
@@ -579,7 +582,8 @@ pub fn show_review_overlay(
         // NOTE: this runs off the UI/window-owning thread (show_review_overlay is called from a spawned
         // worker), which is a known reliability caveat for the AttachThreadInput dance inside
         // force_foreground — to be validated in the Task A11 "keyboard-first without a click" exercise.
-        crate::input::force_foreground(hwnd.0 as isize);
+        let ok = crate::input::force_foreground(hwnd.0 as isize);
+        log::info!("show_review_overlay: force_foreground -> {ok}; window shown");
     }
     let _ = win.set_focus();
 

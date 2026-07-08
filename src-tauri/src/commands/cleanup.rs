@@ -19,10 +19,16 @@ pub async fn preview_cleanup(app: AppHandle, text: String) -> Result<String, Str
 
 /// Analyze `text` and return Harper's reviewable suggestions (spans + replacements) WITHOUT changing it —
 /// the data source for the Grammarly-style review panel, where the user accepts/rejects each fix. Offline.
+///
+/// Runs the Harper analysis on a blocking thread (`spawn_blocking`) rather than inline: as a synchronous
+/// command it ran on the main thread and froze the whole review card (chips, drag, Apply) for the couple
+/// of seconds Harper takes on a large selection. Async + spawn_blocking keeps the UI responsive.
 #[tauri::command]
 #[specta::specta]
-pub fn analyze_text(text: String) -> Vec<crate::dotflow::grammar::TextSuggestion> {
-    crate::dotflow::grammar::analyze(&text)
+pub async fn analyze_text(text: String) -> Vec<crate::dotflow::grammar::TextSuggestion> {
+    tauri::async_runtime::spawn_blocking(move || crate::dotflow::grammar::analyze(&text))
+        .await
+        .unwrap_or_default()
 }
 
 /// Whether a post-process LLM is fully configured (provider + model + prompt). The Cleanup section uses this
