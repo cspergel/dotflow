@@ -74,21 +74,23 @@ mod tests {
 
     #[test]
     fn clamps_to_edge_when_flip_would_still_overflow() {
-        // [F10] Realistic case: window FITS the work area, but anchoring+flipping near the top-left
-        // corner would push it off the left/top. Must clamp back to the edge, not return negatives.
-        // Fails if the final .clamp() lines are deleted (they return (-427, -302) without them).
+        // [F10] A flip genuinely fires AND the flipped position then overflows the opposite edge, so the
+        // final .clamp() lines MUST bite. With GAP=12, cursor (200,300), window 420x300, work 500x600:
+        //   x: 200+12=212; 212+420=632 > 500 -> flip -> 200-12-420 = -232; clamp(0, (500-420).max(0)=80) -> 0
+        //   y: 300+12=312; 312+300=612 > 600 -> flip -> 300-12-300 =  -12; clamp(0, (600-300).max(0)=300) -> 0
+        // Pre-clamp the flip yields (-232, -12) (off the top-left); the clamp pins it to (0, 0).
+        // Delete the two .clamp() lines and this returns (-232, -12) -> the test fails. That is the tooth.
         let wa = WorkArea {
             x: 0.0,
             y: 0.0,
-            width: 800.0,
+            width: 500.0,
             height: 600.0,
         };
-        let (x, y) = clamp_overlay_position((5.0, 5.0), (420.0, 300.0), wa);
-        // default 17,17 fits (17+420=437<=800) so NO flip; stays at 17,17 — assert it's on-screen and
-        // exactly the anchored position (catches an unintended flip AND an over-eager clamp).
-        assert_eq!((x, y), (17.0, 17.0));
-        assert!(x >= wa.x && x + 420.0 <= wa.width, "off right/left edge");
-        assert!(y >= wa.y && y + 300.0 <= wa.height, "off top/bottom edge");
+        assert_eq!(
+            clamp_overlay_position((200.0, 300.0), (420.0, 300.0), wa),
+            (0.0, 0.0),
+            "flip pushed the card off the top-left; clamp must pin it to the work-area origin"
+        );
     }
 
     #[test]
