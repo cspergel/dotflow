@@ -105,8 +105,12 @@ clutter. Every action below is a prompt behind that surface, not a new button.
 > **Gate:** do NOT implement any of this until the prior work (overlay + local AI + Nemotron on this branch)
 > is live-tested and merged.
 
-- [ ] **P1 — Command surface + custom instructions** (foundation; moderate effort). Evolve the review card
-      into the command surface above. Detailed spec: `docs/plans/2026-07-08-command-surface-design.md`.
+- [x] **P1 — Command surface + custom instructions** (foundation). Shipped: the review card now has a
+      "type or say what to do…" input (dictation via the mic) that runs a free-form instruction against the
+      selection (backend `ai_transform_custom` → `build_custom_system`, model-direct routing = design option
+      A), alongside the retained pinned chips (Proofread/Rewrite/Formal/Summarize per user request). Deferred
+      to P2/P3: context-suggestion chips, the "more actions" popover, user-configurable pins, and the tiny
+      intent classifier (option B). Spec: `docs/plans/2026-07-08-command-surface-design.md`.
 - [ ] **P2 — Named actions as prompts** (low effort each, on the existing seam): **Translate** (offline —
       biggest differentiator; dictate/pick target language) first, then Tone presets (one "Tone ▾", not 5
       chips), Expand, Extract, Reply. Plus a **"Structure → SOAP note"** action — the highest-value one for

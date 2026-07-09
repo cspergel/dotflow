@@ -1,8 +1,9 @@
 # P1 — Command surface for the review overlay (design draft)
 
-> Status: **draft for review — NOT approved to build.** Implementation is gated on the prior work
-> (selection overlay + local AI + Nemotron, branch `feat/selection-review-overlay`) being **live-tested and
-> merged** first. This doc is a proposal to react to, with open questions flagged.
+> Status: **P1 MVP implemented (2026-07-09)** on `feat/ai-chat-gpu`. Resolved open questions: Q1 = routing
+> option A (model-direct, `ai_transform_custom`); Q4 = fixed default pins (kept Proofread/Rewrite/Formal/
+> Summarize per user request). Deferred: Q2 Translate UX, Q3 context suggestions, the "more actions" popover,
+> configurable pins, and option B (the intent classifier) — these belong to P2/P3.
 > Context: [`ROADMAP.md` §AI actions](../dotflow-design/ROADMAP.md).
 
 ## Goal

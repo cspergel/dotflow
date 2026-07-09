@@ -47,36 +47,35 @@ fn system_prompt_for(action: &str) -> Option<&'static str> {
     }
 }
 
-/// Transform `text` with the given `action` (`rewrite` | `formal` | `summarize`) using the best available
-/// AI backend. Preference order: the configured cloud/Ollama post-processor → a local offline GGUF model
-/// (only when compiled with `local-llm` and `local_llm_model_path` points at an existing file) → an error.
-/// The local generate() is CPU-bound and runs on a blocking thread so it never stalls the async runtime.
-#[tauri::command]
-#[specta::specta]
-pub async fn ai_transform(app: AppHandle, text: String, action: String) -> Result<String, String> {
-    let Some(system) = system_prompt_for(&action) else {
-        return Err(format!("unknown AI action: {action}"));
-    };
-    if text.trim().is_empty() {
-        return Err("No text to transform".to_string());
-    }
+/// Build the SYSTEM prompt for a free-form user instruction (the command surface). The instruction is
+/// applied to the user's text; the model must return only the transformed text.
+fn build_custom_system(instruction: &str) -> String {
+    format!(
+        "You are a precise text-transformation assistant. Apply the following instruction to the user's \
+         text and output ONLY the resulting text — no preamble, no commentary, no quotes, no explanation.\n\n\
+         Instruction: {instruction}"
+    )
+}
 
-    let settings = get_settings(&app);
+/// Shared transform runner: routes `system_base` + `text` to the best backend (configured cloud/Ollama →
+/// local offline GGUF → error), applying the `/no_think` default (unless `transform_reasoning`), the
+/// input-scaled token budget, and reasoning stripping. Used by both the named-action and free-form commands.
+async fn run_transform(app: &AppHandle, system_base: &str, text: &str) -> Result<String, String> {
+    let settings = get_settings(app);
 
     // A transform is a quick text edit, not a reasoning task. By default we append `/no_think` so reasoning
-    // models (Qwythos / Qwen3.x) skip the <think> pass and answer directly — otherwise they can burn the
-    // token budget thinking and leave nothing after strip_reasoning. When the user opts into reasoning
-    // (`transform_reasoning`), we omit it so the model may think (slower, sometimes better on complex text);
-    // the input-scaled budget below and strip_reasoning cover that path.
+    // models (Qwythos / Qwen3.x) skip the <think> pass and answer directly. When the user opts into reasoning
+    // (`transform_reasoning`), we omit it so the model may think — the input-scaled budget and strip_reasoning
+    // below cover that path.
     let system = if settings.transform_reasoning {
-        system.to_string()
+        system_base.to_string()
     } else {
-        format!("{system}\n\n/no_think")
+        format!("{system_base}\n\n/no_think")
     };
 
     // Preferred backend: the configured cloud/Ollama post-process LLM.
     if crate::commands::cleanup::post_process_is_configured(app.clone()) {
-        return crate::actions::ai_transform_with_llm(&settings, &system, &text)
+        return crate::actions::ai_transform_with_llm(&settings, &system, text)
             .await
             .map(|s| strip_reasoning(&s))
             .filter(|s| !s.is_empty())
@@ -87,8 +86,8 @@ pub async fn ai_transform(app: AppHandle, text: String, action: String) -> Resul
             });
     }
 
-    // Fallback backend: a local offline GGUF model. Only compiled in `local-llm` builds. Uses the
-    // per-task "transform" model override when set, else the default/chat model.
+    // Fallback backend: a local offline GGUF model. Only compiled in `local-llm` builds. Uses the per-task
+    // "transform" model override when set, else the default/chat model.
     #[cfg(feature = "local-llm")]
     {
         let path = settings.model_for_task("transform");
@@ -96,18 +95,16 @@ pub async fn ai_transform(app: AppHandle, text: String, action: String) -> Resul
             let model_path = std::path::PathBuf::from(&path);
             if model_path.exists() {
                 let system = system.clone();
-                // A rewrite/formal output is ~as long as its input; a summary is shorter. Budget ~2× the
-                // input length (≈ chars/4 tokens) so a long selection isn't truncated, plus headroom for any
-                // reasoning, clamped to a sane range. The generator runs an 8192-token context and caps
-                // generation to the room left after the prompt, so a large value here can't overflow.
+                let text = text.to_string();
+                // Output ≈ input length; budget ~2× input + headroom, clamped. The generator runs an
+                // 8192-token context and caps generation to the room after the prompt, so this can't overflow.
                 let max_new = (text.chars().count() / 4 * 2 + 512).clamp(768, 4096);
                 let out = tauri::async_runtime::spawn_blocking(move || {
                     crate::dotflow::local_llm::generate_chat(&model_path, &system, &text, max_new)
                 })
                 .await
                 .map_err(|e| format!("local generate task failed: {e}"))?;
-                // Reject an empty/whitespace-only result — otherwise Apply could clobber the user's
-                // selection with nothing (asymmetric with the cloud path above).
+                // Reject an empty/whitespace-only result — otherwise Apply could clobber the selection.
                 return out.and_then(|s| {
                     let s = strip_reasoning(&s);
                     if s.is_empty() {
@@ -122,6 +119,40 @@ pub async fn ai_transform(app: AppHandle, text: String, action: String) -> Resul
     }
 
     Err("No AI backend configured".to_string())
+}
+
+/// Transform `text` with a named `action` (`rewrite` | `formal` | `summarize`) using the best available AI
+/// backend. Preference order: configured cloud/Ollama post-processor → local offline GGUF model → error.
+#[tauri::command]
+#[specta::specta]
+pub async fn ai_transform(app: AppHandle, text: String, action: String) -> Result<String, String> {
+    let Some(system) = system_prompt_for(&action) else {
+        return Err(format!("unknown AI action: {action}"));
+    };
+    if text.trim().is_empty() {
+        return Err("No text to transform".to_string());
+    }
+    run_transform(&app, system, &text).await
+}
+
+/// Transform `text` per a free-form user `instruction` (the command surface). The instruction becomes the
+/// system prompt; same backend routing / budget / reasoning handling as [`ai_transform`].
+#[tauri::command]
+#[specta::specta]
+pub async fn ai_transform_custom(
+    app: AppHandle,
+    text: String,
+    instruction: String,
+) -> Result<String, String> {
+    if text.trim().is_empty() {
+        return Err("No text to transform".to_string());
+    }
+    let instruction = instruction.trim();
+    if instruction.is_empty() {
+        return Err("Enter an instruction — what should I do with the text?".to_string());
+    }
+    let system = build_custom_system(instruction);
+    run_transform(&app, &system, &text).await
 }
 
 /// Whether the AI-transform chips should be enabled: true if a cloud/Ollama post-processor is configured,
@@ -164,7 +195,17 @@ pub fn set_transform_reasoning(app: AppHandle, enabled: bool) -> Result<(), Stri
 
 #[cfg(test)]
 mod tests {
-    use super::strip_reasoning;
+    use super::{build_custom_system, strip_reasoning};
+
+    #[test]
+    fn custom_system_embeds_instruction_and_output_only_guardrail() {
+        let s = build_custom_system("translate to Spanish");
+        assert!(s.contains("translate to Spanish"), "instruction is embedded");
+        assert!(
+            s.to_lowercase().contains("only"),
+            "keeps the 'output ONLY the result' guardrail so the model doesn't add commentary"
+        );
+    }
 
     #[test]
     fn strips_closed_think_block_keeps_answer() {

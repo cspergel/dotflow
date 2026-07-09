@@ -12,12 +12,15 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { LogicalSize } from "@tauri-apps/api/dpi";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ChevronRight } from "lucide-react";
+import { ChevronRight, Mic, ArrowRight } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { commands } from "@/bindings";
 import { ReviewPanel } from "@/components/settings/cleanup/ReviewPanel";
+import { useChatDictation } from "@/components/chat/useChatDictation";
 
 export type ReviewAction = "proofread" | "rewrite" | "formal" | "summarize";
+// The active view can also be a free-form command ("custom"), which isn't a pinned chip.
+type ActiveAction = ReviewAction | "custom";
 
 const CARD_WIDTH = 420;
 const CARD_MAX_HEIGHT = 480;
@@ -25,7 +28,7 @@ const CARD_MIN_HEIGHT = 96;
 // Height of the non-scrolling chrome (title bar + chip row + footer). The scrolling body is capped at
 // CARD_MAX_HEIGHT minus this, so the body cap and the window's max height share one source of truth and
 // can't drift apart.
-const CARD_CHROME_HEIGHT = 120;
+const CARD_CHROME_HEIGHT = 190;
 const CARD_BODY_MAX_HEIGHT = CARD_MAX_HEIGHT - CARD_CHROME_HEIGHT;
 
 /**
@@ -46,8 +49,12 @@ const ReviewOverlay: React.FC = () => {
   const { t } = useTranslation();
   const [text, setText] = useState("");
   const [aiAvailable, setAiAvailable] = useState(false);
-  const [activeAction, setActiveAction] = useState<ReviewAction>("proofread");
+  const [activeAction, setActiveAction] = useState<ActiveAction>("proofread");
   const [reviewResult, setReviewResult] = useState("");
+  // Command surface: free-form instruction the user types or dictates. `commandText` is the live input;
+  // `customInstruction` is the submitted value that actually drives the run (so editing doesn't re-run).
+  const [commandText, setCommandText] = useState("");
+  const [customInstruction, setCustomInstruction] = useState("");
   // AI-transform (Rewrite / Formal / Summarize) state. `aiResult` is the model's output; it's mirrored
   // into `reviewResult` so Apply/Copy use it. `aiRetryNonce` re-triggers the run when the user hits Retry.
   const [aiLoading, setAiLoading] = useState(false);
@@ -62,6 +69,9 @@ const ReviewOverlay: React.FC = () => {
   // scrolling; the user can expand it to compare. Reset to collapsed on each new selection / action run.
   const [showBefore, setShowBefore] = useState(false);
   const cardRef = useRef<HTMLDivElement>(null);
+  const cmdRef = useRef<HTMLTextAreaElement>(null);
+  // Dictate into the command input ("or say what to do"), reusing the chat dictation pipeline.
+  const { recording, toggleMic } = useChatDictation(setCommandText);
 
   // Listeners + pull-on-mount [F11]. The backend emits "review-text" immediately after show(), which can
   // race this effect's listener registration, so we also PULL the stored payload via getPendingReview();
@@ -82,6 +92,8 @@ const ReviewOverlay: React.FC = () => {
       setAiEmpty(false);
       setActionError(null);
       setShowBefore(false);
+      setCommandText("");
+      setCustomInstruction("");
     };
 
     const setup = async () => {
@@ -101,6 +113,8 @@ const ReviewOverlay: React.FC = () => {
         setAiLoading(false);
         setAiEmpty(false);
         setActionError(null);
+        setCommandText("");
+        setCustomInstruction("");
       });
 
       if (cancelled) {
@@ -177,6 +191,11 @@ const ReviewOverlay: React.FC = () => {
       return;
     }
 
+    // Custom (free-form) runs need a submitted instruction; skip until one exists.
+    if (activeAction === "custom" && !customInstruction.trim()) {
+      return;
+    }
+
     let cancelled = false;
     setAiEmpty(false);
     setAiLoading(true);
@@ -186,8 +205,11 @@ const ReviewOverlay: React.FC = () => {
     // Clear any stale result from a previous action so Apply/Copy can't paste the WRONG output during the
     // "Working…" window: `reviewResult || text` now falls back to the original text, not the prior result.
     setReviewResult("");
-    void commands
-      .aiTransform(text, activeAction)
+    const run =
+      activeAction === "custom"
+        ? commands.aiTransformCustom(text, customInstruction)
+        : commands.aiTransform(text, activeAction);
+    void run
       .then((res) => {
         if (cancelled) return;
         if (res.status === "ok") {
@@ -207,14 +229,34 @@ const ReviewOverlay: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, [activeAction, text, aiRetryNonce]);
+  }, [activeAction, text, aiRetryNonce, customInstruction]);
+
+  // Submit the command input: freeze the instruction and switch to the custom view. Enter runs it; a bumped
+  // nonce lets an identical instruction re-run.
+  const runCommand = useCallback(() => {
+    const instruction = commandText.trim();
+    if (!instruction || !aiAvailable) return;
+    setCustomInstruction(instruction);
+    setActiveAction("custom");
+    setAiRetryNonce((n) => n + 1);
+  }, [commandText, aiAvailable]);
+
+  // Auto-grow the command input (capped), like the chat composers.
+  useEffect(() => {
+    const el = cmdRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, 96)}px`;
+  }, [commandText]);
 
   // Window-level keyboard: Enter → Apply, Escape → Close. Enter is ignored while a button inside the card
   // is focused so it can't hijack ReviewPanel's accept-a-suggestion buttons.
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Enter") {
-        if ((event.target as HTMLElement)?.tagName === "BUTTON") return;
+        const tag = (event.target as HTMLElement)?.tagName;
+        // Buttons handle their own click; the command input / any text field owns its own Enter (run/newline).
+        if (tag === "BUTTON" || tag === "TEXTAREA" || tag === "INPUT") return;
         if (aiLoading) return; // don't apply mid-transform (result isn't ready)
         event.preventDefault();
         void handleApply();
@@ -312,10 +354,69 @@ const ReviewOverlay: React.FC = () => {
         </span>
       </div>
 
-      {/* Chip row */}
+      {/* Chip row — pinned common actions */}
       <div className="flex flex-wrap items-center gap-1.5 border-b border-hairline px-3 pt-2.5 pb-2.5">
         {renderChip("proofread")}
         {AI_ACTIONS.map(renderChip)}
+      </div>
+
+      {/* Command surface — type or dictate a free-form instruction; runs it against the selection. */}
+      <div className="border-b border-hairline px-3 py-2">
+        <div
+          className={`flex items-end gap-1 rounded-lg border px-2 py-1 ${
+            aiAvailable
+              ? "border-hairline-strong focus-within:border-accent"
+              : "border-hairline opacity-60"
+          }`}
+        >
+          <textarea
+            ref={cmdRef}
+            rows={1}
+            value={commandText}
+            disabled={!aiAvailable}
+            placeholder={
+              aiAvailable
+                ? t("settings.review.commandPlaceholder", "Type or say what to do…")
+                : aiHint
+            }
+            onChange={(e) => setCommandText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                runCommand();
+              }
+            }}
+            className="max-h-24 flex-1 resize-none overflow-y-auto bg-transparent py-1 text-sm outline-none placeholder:text-faint disabled:cursor-not-allowed"
+          />
+          <button
+            type="button"
+            onClick={() => void toggleMic(commandText)}
+            disabled={!aiAvailable}
+            title={t("chat.voice", "Voice input")}
+            className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition-colors ${
+              recording
+                ? "animate-pulse bg-red-500 text-white"
+                : "text-muted hover:bg-inset disabled:opacity-40"
+            }`}
+          >
+            <Mic size={14} />
+          </button>
+          <button
+            type="button"
+            onClick={runCommand}
+            disabled={!aiAvailable || !commandText.trim() || aiLoading}
+            title={t("settings.review.run", "Run")}
+            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-accent text-white disabled:opacity-40"
+          >
+            <ArrowRight size={14} />
+          </button>
+        </div>
+        <div className="mt-1 px-0.5 text-[10px] text-faint">
+          {t(
+            "settings.review.commandHint",
+            "e.g. “make this a bullet list”, “translate to Spanish”",
+          )}
+        </div>
       </div>
 
       {/* Body — grows with content up to CARD_MAX_HEIGHT, then scrolls internally. The cap is derived from
