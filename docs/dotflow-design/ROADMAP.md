@@ -130,6 +130,13 @@ clutter. Every action below is a prompt behind that surface, not a new button.
 ## Later / backlog
 
 - Phone-as-microphone (LAN web page, QR pair, WebSocket audio → transcribe pipeline). Likely last.
+- **Remote control (companion to phone-as-mic).** A phone/web client that *drives* the desktop app over the
+  LAN — the inverse of phone-as-mic. Shared plumbing: a small local server on the desktop + QR/token pairing +
+  a browser client. Capabilities: **chat with the local GPU-backed model from your phone** (desktop does the
+  inference), trigger dictation / AI actions / macros, pull transcripts. Local-only + paired + no cloud
+  (privacy thesis); a secure tunnel for true "anywhere" access is a later add. Model it on Claude Code's
+  remote-control UX (a lightweight remote session). P3/agentic territory; build alongside phone-as-mic since
+  they share the server + pairing + client. (Idea: 2026-07-09.)
 - **Whole-window AI action** (extends the highlight→hotkey→action primitive): a hotkey/mode that sources the
   text from the **entire focused window** instead of a selection — grab via select-all+copy, or UI Automation
   (`UIA`/accessibility) to read read-only/browser content — then run the same AI action (Summarize, etc.) and
