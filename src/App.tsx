@@ -365,14 +365,21 @@ function App() {
           activeSection={currentSection}
           onSectionChange={setCurrentSection}
         />
-        {/* Scrollable content area */}
+        {/* Content area. The chat section renders full-bleed (fills the window, manages its own scroll,
+            composer pinned to the bottom); all other sections use the centered, padded, scrollable layout. */}
         <div className="flex-1 flex flex-col overflow-hidden">
-          <div className="flex-1 overflow-y-auto">
-            <div className="flex flex-col items-center px-6 pt-6 pb-10 gap-4">
-              <AccessibilityPermissions />
+          {currentSection === "chat" ? (
+            <div className="flex-1 min-h-0 overflow-hidden">
               {renderSettingsContent(currentSection)}
             </div>
-          </div>
+          ) : (
+            <div className="flex-1 overflow-y-auto">
+              <div className="flex flex-col items-center px-6 pt-6 pb-10 gap-4">
+                <AccessibilityPermissions />
+                {renderSettingsContent(currentSection)}
+              </div>
+            </div>
+          )}
         </div>
       </div>
       {/* Fixed footer at bottom */}
