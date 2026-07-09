@@ -1120,11 +1120,28 @@ impl ShortcutAction for ReviewSelectionAction {
         // itself as the source window. Cleared in `hide_review_overlay` (apply/cancel) and on the paths
         // below. Uses `swap` so the check-and-set is atomic.
         if crate::REVIEW_OPEN.swap(true, std::sync::atomic::Ordering::SeqCst) {
-            // Already open — bring the card back to the front instead of a no-op or a second card. Since it
-            // isn't always-on-top (it can slip behind other windows), re-pressing the hotkey is how the user
-            // resurfaces it. Does NOT re-copy a new selection; close it (Esc/Apply) to review something else.
-            log::info!("Review overlay already open — raising it to the front");
-            crate::overlay::raise_review_overlay(app);
+            // The guard was already set. Two cases, distinguished by whether the card is actually VISIBLE:
+            //
+            // (a) Card visible → a genuine re-press. It isn't always-on-top (can slip behind other windows),
+            //     so re-pressing resurfaces it. Does NOT re-copy a new selection; close it (Esc/Apply) to
+            //     review something else.
+            // (b) Card NOT visible → this is a key-auto-repeat re-fire landing *during* the first fire's
+            //     async copy window (guard set, card not shown yet). Raising the not-yet-populated overlay
+            //     here would `set_focus` away from the source app, so the in-flight synthetic Ctrl+C copies
+            //     the empty overlay instead of the user's selection — the "wedged empty card" bug. So ignore
+            //     it: do not raise, do not steal focus; let the first fire finish its copy + show.
+            let visible = app
+                .get_webview_window("review_overlay")
+                .and_then(|w| w.is_visible().ok())
+                .unwrap_or(false);
+            if visible {
+                log::info!("Review overlay already open — raising it to the front");
+                crate::overlay::raise_review_overlay(app);
+            } else {
+                log::info!(
+                    "Review-selection re-fire ignored (open in flight; not raising a hidden card)"
+                );
+            }
             return;
         }
         let app = app.clone();
