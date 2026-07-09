@@ -1,5 +1,6 @@
 pub mod ai;
 pub mod audio;
+pub mod chat;
 pub mod cleanup;
 pub mod history;
 pub mod llm;

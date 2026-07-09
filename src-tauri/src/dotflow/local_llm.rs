@@ -205,6 +205,50 @@ pub fn generate_chat(
     }
 }
 
+/// Streaming, multi-turn chat generation — the engine behind DotFlow's offline chat panel. Builds the prompt
+/// from the ordered `messages` (model chat template, else Gemma/ChatML fallback), then greedily decodes,
+/// invoking `on_token` with each decoded piece as it is produced so the UI can render tokens live.
+/// `should_cancel` is polled each step for a cooperative early stop (the chat "Stop" button). Returns the
+/// full **cleaned** reply (the streamed pieces are raw; the caller should treat this return as authoritative
+/// on completion). Same panic-safety as [`generate_chat`]: any llama.cpp panic is caught and returned as
+/// `Err`, never unwound into the host.
+pub fn generate_chat_stream(
+    model_path: &Path,
+    messages: &[ChatTurn],
+    max_new_tokens: usize,
+    mut on_token: impl FnMut(&str),
+    should_cancel: &dyn Fn() -> bool,
+) -> Result<String, String> {
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        with_cached_model(model_path, |backend, model| {
+            let (prompt, add_bos) = build_chat_prompt_multi(model, messages);
+            run_generation(
+                backend,
+                model,
+                &prompt,
+                add_bos,
+                max_new_tokens,
+                &mut on_token,
+                should_cancel,
+            )
+        })
+        .map(|s| clean_chat_output(&s))
+    }));
+    match result {
+        Ok(inner) => inner,
+        Err(payload) => {
+            let msg = if let Some(s) = payload.downcast_ref::<&str>() {
+                (*s).to_string()
+            } else if let Some(s) = payload.downcast_ref::<String>() {
+                s.clone()
+            } else {
+                "unknown panic".to_string()
+            };
+            Err(format!("llama.cpp panicked during generation: {msg}"))
+        }
+    }
+}
+
 /// Build the prompt string for a system+user chat turn. Prefers the template baked into the GGUF (so
 /// Qwen, Gemma, Llama, … each get their own correct markers); falls back to ChatML — which suits the
 /// Qwen2.5 test model — when the model ships no template or applying it fails. Returns the prompt plus
@@ -220,43 +264,123 @@ fn has_control_token(model: &LlamaModel, marker: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn build_chat_prompt(model: &LlamaModel, system: &str, user: &str) -> (String, AddBos) {
-    let messages = [
-        LlamaChatMessage::new("system".to_string(), system.to_string()),
-        LlamaChatMessage::new("user".to_string(), user.to_string()),
-    ];
-    if let (Ok(m0), Ok(m1)) = (&messages[0], &messages[1]) {
+/// A chat role in a multi-turn conversation. The offline chat feature sends an ordered list of these; the
+/// single-turn AI-transform path is just `[System, User]`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Role {
+    System,
+    User,
+    Assistant,
+}
+
+impl Role {
+    /// The role string used by ChatML markers and llama.cpp's chat-template applier.
+    fn as_str(self) -> &'static str {
+        match self {
+            Role::System => "system",
+            Role::User => "user",
+            Role::Assistant => "assistant",
+        }
+    }
+}
+
+/// One turn in a chat conversation.
+#[derive(Clone, Debug)]
+pub struct ChatTurn {
+    pub role: Role,
+    pub content: String,
+}
+
+/// Render a conversation in **ChatML** (Qwen-style), ending at the assistant tag so the model completes the
+/// reply. `parse_special=true` in `str_to_token` turns these markers into real special tokens. Preserves the
+/// exact turn order — this is what lets a multi-turn chat "remember" earlier messages.
+fn format_chatml(messages: &[ChatTurn]) -> String {
+    let mut out = String::new();
+    for m in messages {
+        out.push_str(&format!(
+            "<|im_start|>{}\n{}<|im_end|>\n",
+            m.role.as_str(),
+            m.content
+        ));
+    }
+    out.push_str("<|im_start|>assistant\n");
+    out
+}
+
+/// Render a conversation for **Gemma**. Gemma has no system role and calls the assistant "model", and it does
+/// NOT understand ChatML (it echoes `<|im_end|>` as literal text and never stops). So use Gemma's own turn
+/// markers; fold any system content into the first user turn. Ends at the `model` tag for completion.
+fn format_gemma(messages: &[ChatTurn]) -> String {
+    let mut out = String::new();
+    let mut system_prefix = String::new();
+    let mut folded = false;
+    for m in messages {
+        match m.role {
+            Role::System => {
+                if !m.content.trim().is_empty() {
+                    if !system_prefix.is_empty() {
+                        system_prefix.push_str("\n\n");
+                    }
+                    system_prefix.push_str(&m.content);
+                }
+            }
+            Role::User => {
+                let content = if !folded && !system_prefix.is_empty() {
+                    folded = true;
+                    format!("{system_prefix}\n\n{}", m.content)
+                } else {
+                    m.content.clone()
+                };
+                out.push_str(&format!("<start_of_turn>user\n{content}<end_of_turn>\n"));
+            }
+            Role::Assistant => {
+                out.push_str(&format!(
+                    "<start_of_turn>model\n{}<end_of_turn>\n",
+                    m.content
+                ));
+            }
+        }
+    }
+    out.push_str("<start_of_turn>model\n");
+    out
+}
+
+/// Build the prompt for a multi-turn conversation. Prefers the template baked into the GGUF (so Qwen, Gemma,
+/// Llama, … each get their own correct markers); falls back to Gemma markers (if the model has Gemma's control
+/// tokens) else ChatML. Returns the prompt plus the `AddBos` policy: the built-in template owns any BOS (so
+/// `Never`), while the bare fallbacks defer to the tokenizer config (`Always`).
+fn build_chat_prompt_multi(model: &LlamaModel, messages: &[ChatTurn]) -> (String, AddBos) {
+    let llama_msgs: Vec<LlamaChatMessage> = messages
+        .iter()
+        .filter_map(|m| LlamaChatMessage::new(m.role.as_str().to_string(), m.content.clone()).ok())
+        .collect();
+    // add_ass=true leaves the prompt hanging at the assistant tag so the model completes the reply.
+    if llama_msgs.len() == messages.len() {
         if let Ok(tmpl) = model.chat_template(None) {
-            // add_ass=true leaves the prompt hanging at the assistant tag so the model completes the reply.
-            if let Ok(rendered) = model.apply_chat_template(&tmpl, &[m0.clone(), m1.clone()], true)
-            {
+            if let Ok(rendered) = model.apply_chat_template(&tmpl, &llama_msgs, true) {
                 return (rendered, AddBos::Never);
             }
         }
     }
-    // Gemma-family fallback. Gemma's jinja template isn't rendered by llama.cpp's built-in applier, and
-    // Gemma does NOT understand ChatML — fed `<|im_end|>` it emits that marker as literal text and never
-    // stops (its EOG is `<end_of_turn>`, a real token). So use Gemma's own turn markers. Gemma has no
-    // system role, so fold the system instruction into the user turn.
     if has_control_token(model, "<start_of_turn>") {
-        let content = if system.trim().is_empty() {
-            user.to_string()
-        } else {
-            format!("{system}\n\n{user}")
-        };
-        return (
-            format!("<start_of_turn>user\n{content}<end_of_turn>\n<start_of_turn>model\n"),
-            AddBos::Always,
-        );
+        return (format_gemma(messages), AddBos::Always);
     }
-    // ChatML fallback (Qwen-style). parse_special=true in str_to_token turns these markers into real
-    // special tokens, so this is a valid prompt even though it's assembled as plain text.
-    (
-        format!(
-            "<|im_start|>system\n{system}<|im_end|>\n<|im_start|>user\n{user}<|im_end|>\n<|im_start|>assistant\n"
-        ),
-        AddBos::Always,
-    )
+    (format_chatml(messages), AddBos::Always)
+}
+
+/// Single-turn convenience over [`build_chat_prompt_multi`] for the AI-transform path (`[System, User]`).
+fn build_chat_prompt(model: &LlamaModel, system: &str, user: &str) -> (String, AddBos) {
+    let messages = [
+        ChatTurn {
+            role: Role::System,
+            content: system.to_string(),
+        },
+        ChatTurn {
+            role: Role::User,
+            content: user.to_string(),
+        },
+    ];
+    build_chat_prompt_multi(model, &messages)
 }
 
 /// Trim trailing chat/control markers a model may emit as literal text (e.g. a mismatched-template
@@ -286,7 +410,15 @@ fn generate_chat_inner(
 ) -> Result<String, String> {
     with_cached_model(model_path, |backend, model| {
         let (prompt, add_bos) = build_chat_prompt(model, system, user);
-        run_generation(backend, model, &prompt, add_bos, max_new_tokens)
+        run_generation(
+            backend,
+            model,
+            &prompt,
+            add_bos,
+            max_new_tokens,
+            &mut |_| {},
+            &|| false,
+        )
     })
     .map(|s| clean_chat_output(&s))
 }
@@ -297,19 +429,31 @@ fn generate_inner(
     max_new_tokens: usize,
 ) -> Result<String, String> {
     with_cached_model(model_path, |backend, model| {
-        run_generation(backend, model, prompt, AddBos::Always, max_new_tokens)
+        run_generation(
+            backend,
+            model,
+            prompt,
+            AddBos::Always,
+            max_new_tokens,
+            &mut |_| {},
+            &|| false,
+        )
     })
 }
 
 /// Create a context, tokenize `prompt`, and greedily decode up to `max_new_tokens`. Shared by the plain
-/// [`generate`] path and the chat-templated [`generate_chat`] path. `add_bos` lets the chat path suppress
-/// a BOS the template already emitted while the plain path keeps the tokenizer-config default.
+/// [`generate`], chat, and streaming-chat paths. `add_bos` lets the chat path suppress a BOS the template
+/// already emitted. `on_token` receives each newly decoded piece of text as it is produced (for streaming);
+/// pass a no-op for the batch paths. `should_cancel` is polled before each decode step so a caller can stop
+/// generation early.
 fn run_generation(
     backend: &LlamaBackend,
     model: &LlamaModel,
     prompt: &str,
     add_bos: AddBos,
     max_new_tokens: usize,
+    on_token: &mut dyn FnMut(&str),
+    should_cancel: &dyn Fn() -> bool,
 ) -> Result<String, String> {
     // A 4096-token context is plenty for a "rewrite this selection" round-trip. Cap it at what the
     // model was actually trained on so we never ask for more than the weights support.
@@ -379,6 +523,11 @@ fn run_generation(
     let mut n_cur = batch.n_tokens();
 
     for _ in 0..effective_max_new {
+        // Cooperative cancel: a streaming caller (e.g. the chat UI's Stop button) can end generation early.
+        if should_cancel() {
+            break;
+        }
+
         // Sample from the logits of the last token in the current batch.
         let token = sampler.sample(&ctx, batch.n_tokens() - 1);
         sampler.accept(token);
@@ -390,7 +539,10 @@ fn run_generation(
         // Detokenize as plaintext so any stray control/special token renders harmlessly rather than as
         // literal marker text.
         match model.token_to_str(token, Special::Plaintext) {
-            Ok(piece) => output.push_str(&piece),
+            Ok(piece) => {
+                on_token(&piece);
+                output.push_str(&piece);
+            }
             Err(e) => return Err(format!("failed to detokenize token: {e}")),
         }
 
@@ -406,4 +558,129 @@ fn run_generation(
     }
 
     Ok(output)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn convo() -> Vec<ChatTurn> {
+        // A 4-turn conversation: system + two user turns with an assistant reply between them.
+        vec![
+            ChatTurn {
+                role: Role::System,
+                content: "You are helpful.".to_string(),
+            },
+            ChatTurn {
+                role: Role::User,
+                content: "Hi".to_string(),
+            },
+            ChatTurn {
+                role: Role::Assistant,
+                content: "Hello!".to_string(),
+            },
+            ChatTurn {
+                role: Role::User,
+                content: "What is 2+2?".to_string(),
+            },
+        ]
+    }
+
+    /// Ordering is the whole point of multi-turn: every turn must appear, in conversation order, so the model
+    /// "remembers" earlier messages. This fails if a turn is dropped, reordered, or mis-marked.
+    #[test]
+    fn chatml_preserves_multi_turn_order_and_markers() {
+        let p = format_chatml(&convo());
+
+        // Hangs at the assistant tag so the model completes the reply.
+        assert!(
+            p.ends_with("<|im_start|>assistant\n"),
+            "prompt must end ready for the assistant to complete: {p:?}"
+        );
+        // Correct role markers for each turn.
+        assert!(p.contains("<|im_start|>system\nYou are helpful.<|im_end|>"));
+        assert!(p.contains("<|im_start|>user\nHi<|im_end|>"));
+        assert!(p.contains("<|im_start|>assistant\nHello!<|im_end|>"));
+        assert!(p.contains("<|im_start|>user\nWhat is 2+2?<|im_end|>"));
+        // Strict conversation order (the teeth).
+        let sys = p.find("You are helpful.").unwrap();
+        let u1 = p.find("Hi").unwrap();
+        let a1 = p.find("Hello!").unwrap();
+        let u2 = p.find("What is 2+2?").unwrap();
+        assert!(
+            sys < u1 && u1 < a1 && a1 < u2,
+            "turns must appear in conversation order (sys<u1<a1<u2), got {sys},{u1},{a1},{u2}"
+        );
+    }
+
+    /// Gemma has no system role and calls the assistant "model"; system content folds into the first user
+    /// turn. This fails if we leak a raw `system`/`assistant` role marker (which Gemma would emit as literal
+    /// text and never stop) or drop the fold.
+    #[test]
+    fn gemma_folds_system_into_first_user_and_uses_model_role() {
+        let p = format_gemma(&convo());
+
+        assert!(
+            p.ends_with("<start_of_turn>model\n"),
+            "prompt must end at the model tag: {p:?}"
+        );
+        // System folded into the FIRST user turn.
+        assert!(
+            p.contains("<start_of_turn>user\nYou are helpful.\n\nHi<end_of_turn>"),
+            "system must fold into the first user turn: {p:?}"
+        );
+        // Assistant rendered as "model", not "assistant".
+        assert!(p.contains("<start_of_turn>model\nHello!<end_of_turn>"));
+        // Later user turn is NOT re-folded with the system prefix.
+        assert!(p.contains("<start_of_turn>user\nWhat is 2+2?<end_of_turn>"));
+        // Gemma must never see raw system/assistant role tokens (it would echo them and never stop).
+        assert!(
+            !p.contains("<start_of_turn>system") && !p.contains("<start_of_turn>assistant"),
+            "no raw system/assistant role markers for Gemma: {p:?}"
+        );
+        // Order preserved.
+        let hi = p.find("Hi<end_of_turn>").unwrap();
+        let hello = p.find("Hello!").unwrap();
+        let q = p.find("What is 2+2?").unwrap();
+        assert!(hi < hello && hello < q, "conversation order must hold");
+    }
+
+    /// The single-turn convenience must match the multi-turn ChatML formatting for `[System, User]`, so the
+    /// existing AI-transform path is unchanged by the refactor.
+    #[test]
+    fn single_turn_chatml_matches_two_message_convo() {
+        let two = vec![
+            ChatTurn {
+                role: Role::System,
+                content: "Be terse.".to_string(),
+            },
+            ChatTurn {
+                role: Role::User,
+                content: "hello".to_string(),
+            },
+        ];
+        assert_eq!(
+            format_chatml(&two),
+            "<|im_start|>system\nBe terse.<|im_end|>\n<|im_start|>user\nhello<|im_end|>\n<|im_start|>assistant\n"
+        );
+    }
+
+    /// Empty system → Gemma emits just the user turn (no stray blank fold), matching the pre-refactor behavior.
+    #[test]
+    fn gemma_empty_system_is_just_the_user_turn() {
+        let msgs = vec![
+            ChatTurn {
+                role: Role::System,
+                content: "   ".to_string(),
+            },
+            ChatTurn {
+                role: Role::User,
+                content: "ping".to_string(),
+            },
+        ];
+        assert_eq!(
+            format_gemma(&msgs),
+            "<start_of_turn>user\nping<end_of_turn>\n<start_of_turn>model\n"
+        );
+    }
 }
