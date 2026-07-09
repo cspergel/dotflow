@@ -98,6 +98,22 @@ function sanitize(text: string): string {
   return out;
 }
 
+// Reasoning models (Qwen3.x / Qwythos, DeepSeek-R1, …) emit their chain-of-thought in `<think>…</think>`
+// before the answer. Split it out so the UI can hide the reasoning by default (collapsible) and show just
+// the answer. Handles the mid-stream case where `<think>` is open but not yet closed.
+function parseThinking(text: string): { thinking: string | null; answer: string } {
+  const start = text.indexOf("<think>");
+  if (start === -1) return { thinking: null, answer: text };
+  const end = text.indexOf("</think>");
+  if (end === -1) {
+    // Still thinking (stream hasn't closed the tag yet).
+    return { thinking: text.slice(start + 7).trim(), answer: "" };
+  }
+  const thinking = text.slice(start + 7, end).trim();
+  const answer = (text.slice(0, start) + text.slice(end + 8)).trim();
+  return { thinking, answer };
+}
+
 function appendToLastAssistant(msgs: Msg[], text: string): Msg[] {
   const last = msgs[msgs.length - 1];
   if (!last || last.role !== "assistant") return msgs;
@@ -469,7 +485,8 @@ export default function ChatView() {
                           copyMessage(
                             i,
                             m.role === "assistant"
-                              ? sanitize(m.content)
+                              ? parseThinking(sanitize(m.content)).answer ||
+                                  sanitize(m.content)
                               : m.content,
                           )
                         }
@@ -484,18 +501,46 @@ export default function ChatView() {
                       </button>
                     )}
                   </div>
-                  <div
-                    className={`select-text cursor-text whitespace-pre-wrap leading-relaxed ${
-                      m.error
-                        ? "text-red-600"
-                        : "text-neutral-800 dark:text-neutral-100"
-                    }`}
-                  >
-                    {(m.role === "assistant"
-                      ? sanitize(m.content)
-                      : m.content) ||
-                      (streaming && i === messages.length - 1 ? "…" : "")}
-                  </div>
+                  {m.role === "assistant" ? (
+                    (() => {
+                      const { thinking, answer } = parseThinking(
+                        sanitize(m.content),
+                      );
+                      const isLast = i === messages.length - 1;
+                      return (
+                        <>
+                          {thinking && (
+                            <details className="mb-1 rounded-lg border border-neutral-200 bg-neutral-50 px-2 py-1 text-xs text-neutral-500 dark:border-neutral-800 dark:bg-neutral-800/30">
+                              <summary className="cursor-pointer select-none">
+                                {t("chat.reasoning")}
+                              </summary>
+                              <div className="mt-1 select-text whitespace-pre-wrap leading-relaxed">
+                                {thinking}
+                              </div>
+                            </details>
+                          )}
+                          <div
+                            className={`select-text cursor-text whitespace-pre-wrap leading-relaxed ${
+                              m.error
+                                ? "text-red-600"
+                                : "text-neutral-800 dark:text-neutral-100"
+                            }`}
+                          >
+                            {answer ||
+                              (streaming && isLast
+                                ? thinking
+                                  ? t("chat.thinking")
+                                  : "…"
+                                : "")}
+                          </div>
+                        </>
+                      );
+                    })()
+                  ) : (
+                    <div className="select-text cursor-text whitespace-pre-wrap leading-relaxed text-neutral-800 dark:text-neutral-100">
+                      {m.content}
+                    </div>
+                  )}
                 </div>
               ))}
             </div>

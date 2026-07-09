@@ -42,6 +42,8 @@
     "roleYou": "You",
     "roleAssistant": "DotFlow",
     "copy": "Copy",
+    "reasoning": "Reasoning",
+    "thinking": "Thinking…",
     "empty": "Ask your offline model anything.",
     "placeholder": "Ask anything…  (Enter to send, Shift+Enter for newline)",
     "send": "Send",
