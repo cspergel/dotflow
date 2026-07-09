@@ -74,6 +74,28 @@ function newId(): string {
   }
 }
 
+// Some models leak a trailing chat-template marker into their reply (e.g. Gemma emitting `<|im_end|>` /
+// `|im_end|>`, or `<end_of_turn>`) when the tokenizer doesn't treat it as a stop token. Cut the text at the
+// first such marker for display/copy. (The backend also cleans this, but robustly here covers partial
+// variants like a `|im_end|>` whose leading `<` tokenized separately.)
+function sanitize(text: string): string {
+  let out = text;
+  for (const marker of [
+    "<|im_end|>",
+    "|im_end|>",
+    "<|im_start|>",
+    "<end_of_turn>",
+    "<start_of_turn>",
+    "<eos>",
+    "</s>",
+    "<|endoftext|>",
+  ]) {
+    const idx = out.indexOf(marker);
+    if (idx !== -1) out = out.slice(0, idx);
+  }
+  return out;
+}
+
 function appendToLastAssistant(msgs: Msg[], text: string): Msg[] {
   const last = msgs[msgs.length - 1];
   if (!last || last.role !== "assistant") return msgs;
@@ -404,7 +426,14 @@ export default function ChatView() {
                     {m.content && !m.error && (
                       <button
                         type="button"
-                        onClick={() => copyMessage(i, m.content)}
+                        onClick={() =>
+                          copyMessage(
+                            i,
+                            m.role === "assistant"
+                              ? sanitize(m.content)
+                              : m.content,
+                          )
+                        }
                         className="text-neutral-400 opacity-0 transition hover:text-neutral-600 group-hover:opacity-100 dark:hover:text-neutral-200"
                         title={t("chat.copy")}
                       >
@@ -417,13 +446,15 @@ export default function ChatView() {
                     )}
                   </div>
                   <div
-                    className={`whitespace-pre-wrap leading-relaxed ${
+                    className={`select-text cursor-text whitespace-pre-wrap leading-relaxed ${
                       m.error
                         ? "text-red-600"
                         : "text-neutral-800 dark:text-neutral-100"
                     }`}
                   >
-                    {m.content ||
+                    {(m.role === "assistant"
+                      ? sanitize(m.content)
+                      : m.content) ||
                       (streaming && i === messages.length - 1 ? "…" : "")}
                   </div>
                 </div>
