@@ -701,6 +701,10 @@ pub fn run(cli_args: CliArgs) {
             commands::llm::cancel_llm_download,
             commands::llm::select_llm_model,
             commands::llm::delete_llm_model,
+            commands::dictionary::get_dictionary_packs,
+            commands::dictionary::set_dictionary_pack_enabled,
+            commands::dictionary::reload_dictionary_packs,
+            commands::dictionary::open_dictionaries_folder,
             shortcut::change_selection_review_enabled_setting,
             helpers::clamshell::is_laptop,
         ])
@@ -901,6 +905,18 @@ pub fn run(cli_args: CliArgs) {
             app.manage(TranscriptionCoordinator::new(app_handle.clone()));
 
             initialize_core_logic(&app_handle);
+
+            // DotFlow: build the merged Harper dictionary from the enabled dictionary packs BEFORE the first
+            // cleanup can run. Best-effort: a missing/unreadable dir or a bad pack degrades to curated-only
+            // (never panics), so a bad hand-edited pack can't wedge startup.
+            {
+                let dir = commands::dictionary::dictionaries_dir(&app_handle);
+                let _ = std::fs::create_dir_all(&dir);
+                dotflow::dictionary_packs::set_enabled_packs(
+                    &dir,
+                    &settings.enabled_dictionary_packs,
+                );
+            }
 
             // Populate the overlay-enabled cache from initial settings so the
             // audio path (overlay::emit_levels, called ~24 Hz during recording)

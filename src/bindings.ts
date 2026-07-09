@@ -433,6 +433,28 @@ async deleteLlmModel(id: string) : Promise<Result<null, string>> {
     else return { status: "error", error: e  as any };
 }
 },
+async getDictionaryPacks() : Promise<DictionaryPackInfo[]> {
+    return await TAURI_INVOKE("get_dictionary_packs");
+},
+async setDictionaryPackEnabled(id: string, enabled: boolean) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("set_dictionary_pack_enabled", { id, enabled }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async reloadDictionaryPacks() : Promise<DictionaryPackInfo[]> {
+    return await TAURI_INVOKE("reload_dictionary_packs");
+},
+async openDictionariesFolder() : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("open_dictionaries_folder") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 async changeAppLanguageSetting(language: string) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("change_app_language_setting", { language }) };
@@ -1043,7 +1065,13 @@ overlay_style?: OverlayStyle;
  * configured. Empty = no local model set (the AI chips then require a cloud backend). Only consulted
  * in builds compiled with the `local-llm` feature. Set via the store; no in-app editor yet.
  */
-local_llm_model_path?: string }
+local_llm_model_path?: string;
+/**
+ * DotFlow: ids of enabled dictionary packs (medical dictionary pack). Each id is a pack discovered in
+ * `%APPDATA%/…/dictionaries/*.txt` or the bundled `medical` pack. Default empty (opt-in, OFF).
+ */
+enabled_dictionary_packs?: string[] }
+export type DictionaryPackInfo = { id: string; label: string; enabled: boolean; term_count: number }
 export type AudioDevice = { index: string; name: string; is_default: boolean }
 export type AutoSubmitKey = "enter" | "ctrl_enter" | "cmd_enter"
 export type AvailableAccelerators = { transcribe: string[]; ort: string[]; gpu_devices: GpuDeviceOption[] }
