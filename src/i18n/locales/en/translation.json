@@ -22,7 +22,17 @@
       "review": "Review",
       "system": "System"
     },
-    "cleanup": "Cleanup"
+    "cleanup": "Cleanup",
+    "chat": "AI Chat"
+  },
+  "chat": {
+    "model": "Model",
+    "noModel": "No local model — download one in Models",
+    "newChat": "New chat",
+    "empty": "Ask your offline model anything.",
+    "placeholder": "Ask anything…  (Enter to send, Shift+Enter for newline)",
+    "send": "Send",
+    "stop": "Stop"
   },
   "onboarding": {
     "subtitle": "To get started, choose a transcription model",

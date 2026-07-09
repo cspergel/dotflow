@@ -1,6 +1,7 @@
 import React from "react";
 import { useTranslation } from "react-i18next";
 import {
+  Bot,
   Cog,
   FlaskConical,
   History,
@@ -23,6 +24,7 @@ import {
   PhrasesSettings,
   CleanupSettings,
 } from "./settings";
+import ChatView from "./chat/ChatView";
 
 export type SidebarSection = keyof typeof SECTIONS_CONFIG;
 
@@ -74,6 +76,13 @@ export const SECTIONS_CONFIG = {
     component: ModelsSettings,
     enabled: () => true,
     group: "dictate",
+  },
+  chat: {
+    labelKey: "sidebar.chat",
+    icon: Bot,
+    component: ChatView,
+    enabled: () => true,
+    group: "review",
   },
   history: {
     labelKey: "sidebar.history",

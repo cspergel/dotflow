@@ -398,6 +398,25 @@ async aiTransform(text: string, action: string) : Promise<Result<string, string>
 async aiTransformAvailable() : Promise<boolean> {
     return await TAURI_INVOKE("ai_transform_available");
 },
+async chatStream(id: number, messages: { role: string; content: string }[]) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("chat_stream", { id, messages }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async chatCancel(id: number) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("chat_cancel", { id }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async chatAvailable() : Promise<boolean> {
+    return await TAURI_INVOKE("chat_available");
+},
 async listLlmModels() : Promise<LlmModelInfo[]> {
     return await TAURI_INVOKE("list_llm_models");
 },
