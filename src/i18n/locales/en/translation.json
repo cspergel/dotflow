@@ -603,6 +603,17 @@
           "details": "DotFlow's local speech-to-text is built on transcribe.cpp and ggml. Thanks to the amazing work by Georgi Gerganov and contributors."
         }
       }
+    },
+    "dictionaries": {
+      "group": "Dictionaries",
+      "description": "Enable term packs so valid domain vocabulary (drug names, abbreviations, anatomy) is not flagged as a misspelling. Terms are never silently auto-corrected into — the safe, acceptance-only design.",
+      "loading": "Loading dictionary packs…",
+      "empty": "No dictionary packs found.",
+      "termCount": "{{count}} terms",
+      "openFolder": "Open dictionaries folder",
+      "reload": "Reload",
+      "reloading": "Reloading…",
+      "hint": "Drop your own .txt term lists (one term per line) in the folder, then Reload."
     }
   },
   "footer": {

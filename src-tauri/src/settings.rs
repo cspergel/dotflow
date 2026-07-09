@@ -473,6 +473,11 @@ pub struct AppSettings {
     /// in builds compiled with the `local-llm` feature. Set via the store; no in-app editor yet.
     #[serde(default)]
     pub local_llm_model_path: String,
+    /// DotFlow: ids of enabled dictionary packs (design: medical dictionary pack). Each id is a pack
+    /// discovered in `%APPDATA%/…/dictionaries/*.txt` or the bundled `medical` pack. Default empty (opt-in,
+    /// OFF). Enabled ids with no corresponding pack file are simply ignored (stale-toggle tolerant).
+    #[serde(default)]
+    pub enabled_dictionary_packs: Vec<String>,
 }
 
 fn default_model() -> String {
@@ -957,6 +962,7 @@ pub fn get_default_settings() -> AppSettings {
         vad_enabled: default_vad_enabled(),
         overlay_style: default_overlay_style(),
         local_llm_model_path: String::new(),
+        enabled_dictionary_packs: Vec::new(),
     }
 }
 

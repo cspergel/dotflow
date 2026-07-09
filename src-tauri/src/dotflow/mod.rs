@@ -11,6 +11,7 @@
 //! injection cadence, the overlay) wraps this core; it is intentionally NOT in this module.
 
 pub mod cleanup;
+pub mod dictionary_packs;
 pub mod field_stream;
 pub mod grammar;
 pub mod llm_catalog;

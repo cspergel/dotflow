@@ -3,6 +3,7 @@ pub mod audio;
 pub mod chat;
 pub mod chat_dictate;
 pub mod cleanup;
+pub mod dictionary;
 pub mod history;
 pub mod llm;
 pub mod models;

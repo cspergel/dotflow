@@ -7,6 +7,7 @@ import { ToggleSwitch } from "../../ui/ToggleSwitch";
 import { ShortcutInput } from "../ShortcutInput";
 import { ReviewPanel } from "./ReviewPanel";
 import { LlmModelPicker } from "./LlmModelPicker";
+import { DictionaryPacks } from "./DictionaryPacks";
 import { useSettings } from "../../../hooks/useSettings";
 import { commands } from "@/bindings";
 
@@ -122,6 +123,8 @@ export const CleanupSettings: React.FC = () => {
           <ShortcutInput shortcutId="review_selection" grouped={true} />
         )}
       </SettingsGroup>
+
+      <DictionaryPacks />
 
       <LlmModelPicker />
 
