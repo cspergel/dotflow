@@ -398,6 +398,17 @@ async aiTransform(text: string, action: string) : Promise<Result<string, string>
 async aiTransformAvailable() : Promise<boolean> {
     return await TAURI_INVOKE("ai_transform_available");
 },
+async getTransformReasoning() : Promise<boolean> {
+    return await TAURI_INVOKE("get_transform_reasoning");
+},
+async setTransformReasoning(enabled: boolean) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("set_transform_reasoning", { enabled }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 async chatStream(id: number, messages: { role: string; content: string }[], nCtx: number) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("chat_stream", { id, messages, nCtx }) };
@@ -442,6 +453,17 @@ async listLocalModels() : Promise<LocalModelInfo[]> {
 async setLocalModel(path: string) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("set_local_model", { path }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async getTaskModel(role: string) : Promise<string> {
+    return await TAURI_INVOKE("get_task_model", { role });
+},
+async setTaskModel(role: string, path: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("set_task_model", { role, path }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -496,6 +518,25 @@ async reloadDictionaryPacks() : Promise<DictionaryPackInfo[]> {
 async openDictionariesFolder() : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("open_dictionaries_folder") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async getCustomDictionaryWords() : Promise<string[]> {
+    return await TAURI_INVOKE("get_custom_dictionary_words");
+},
+async addCustomDictionaryWord(word: string) : Promise<Result<string[], string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("add_custom_dictionary_word", { word }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async removeCustomDictionaryWord(word: string) : Promise<Result<string[], string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("remove_custom_dictionary_word", { word }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
