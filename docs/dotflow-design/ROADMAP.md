@@ -150,3 +150,64 @@ clutter. Every action below is a prompt behind that surface, not a new button.
   the exe itself (~122 MB from statically-linked CUDA kernels); that only shrinks with the parked
   dynamic-`ggml-cuda.dll` approach, which is blocked by the whisper/llama `ggml-base.dll` collision (research
   2026-07-08) and would need a separate CUDA helper process. Gate behind the same runtime GPU toggle.
+
+## Long-term vision — voice-driven local agent for a web EMR (exploratory, 2026-07-09)
+
+The most ambitious direction: a **local tool-calling agent** that automates clinical busywork (chart-prep,
+note drafting) in a **simple web-based EMR**, driven by voice from the mic or phone. It composes DotFlow's
+existing primitives — offline ASR in, local GPU LLM reasoning, the P3 dictation-command mode, and the
+remote-control backlog — into an agent loop. Flagged **exploratory**: build only after the core dictation +
+AI-actions arc is live and merged, and only against an EMR the user is authorized to automate.
+
+**The load-bearing design decision — split "what" from "how".** A small local model is *not* trusted to guess
+the DOM live (brittle + unsafe near a chart). Instead:
+
+- A hand-cleaned **site adapter** owns the *how*: a stable map of this EMR's UI to named, audited actions
+  (`open_chart`, `get_last_visit`, `fill_note(text)`, `save`), split **read** vs **write**. Deterministic.
+- The **tool-calling model** (Hermes / Qwen function-calling) owns the *what*: it emits `fill_note("…")`
+  calls; it never touches selectors. It supplies the variable content (which patient, the note text); the
+  adapter supplies the frozen mechanics.
+- A **confirmation gate** wraps every *write* action (voice or tap "yes"). Non-negotiable — a wrong write in
+  a live chart is a patient-safety event, not a bug.
+
+**Build the adapter by demonstration, not by hand (record-to-teach).** Use `npx playwright codegen <emr-url>`
+(or Chrome DevTools → Recorder): the user performs one real chart-prep, the recorder captures the steps +
+selectors, and we clean that into the adapter. Productized later as a DotFlow **"Teach mode"** (demonstrate a
+workflow once → saved as a reusable, voice-triggerable action) built on the same CDP recording.
+
+**Two questions to resolve before scoping (cheaper paths hide here):**
+
+- **Hosted-with-login or local?** Decides the driver + the auth/pairing story for the phone trigger.
+- **Is there an HTTP/JSON API behind the page?** (DevTools → Network while saving a note.) If yes, driving
+  those authenticated calls directly is *far* more robust than UI automation and **skips the browser adapter
+  entirely** — a "simple webpage EMR" often has a trivial JSON backend. Prefer API-over-DOM whenever it exists.
+
+**Safety invariants (all phases):** PHI never leaves the machine (local model only); the phone/remote channel
+is paired + authenticated, never open LAN; writes are always human-confirmed; start **draft-only** and add
+"acting" tools one at a time, each behind confirmation, each reversible.
+
+**Implementation steps (phased, each shippable + gated):**
+
+1. **Recon + decision (no code).** Answer hosted/local + API-or-DOM. If an API exists, target it and skip
+   steps 2–3's browser work in favor of a typed API client with the same read/write split.
+2. **Driver + one read tool.** Attach to Chromium over CDP (Rust `chromiumoxide`, or a Playwright sidecar).
+   Prove `get_chart()` / `get_last_visit()` against the real EMR (read-only, zero risk).
+3. **Site adapter from a recording.** `playwright codegen` one chart-prep → clean the selectors into the
+   adapter → expose the read actions + a single write action `fill_note(text)`. Unit-test the adapter's
+   selector resolution against a saved copy of the page.
+4. **Tool registry + agent loop.** Wire the adapter actions as tools for the local tool-calling model
+   (Hermes/Qwen); bounded step count; structured call → observe → next. Read tools auto-run; **write tools
+   pause for confirmation.** Reuse the P3 dictation-command intent router as the front door.
+5. **Draft-only MVP.** Voice command → agent reads the chart, drafts a **SOAP note** (reuses the P2
+   "Structure → SOAP" action), fills it into the note field, and **stops before Save** for review. This is
+   the 80% time-saver with none of the autonomous-write risk.
+6. **Voice + phone trigger.** Hook the loop to the mic and the remote-control channel (shared server +
+   pairing from the phone-as-mic / remote-control backlog) so it's runnable hands-free / from the phone.
+7. **Guarded "acting" tools (last).** Add `save` and any other writes strictly behind explicit per-action
+   confirmation, with an audit log of every action taken. Never autonomous.
+
+**Depends on / composes:** P2 (SOAP action), P3 (dictation command mode / intent routing), and the
+remote-control + phone-as-mic backlog (shared local server + pairing). A new local **tool-calling model**
+(Hermes or a Qwen function-calling variant) is the added dependency — importable via the existing GGUF model
+picker. Detailed adapter-pattern + record-to-teach sketch to live in `docs/plans` when this leaves the
+backlog.
