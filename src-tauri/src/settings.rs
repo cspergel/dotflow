@@ -478,6 +478,16 @@ pub struct AppSettings {
     /// OFF). Enabled ids with no corresponding pack file are simply ignored (stale-toggle tolerant).
     #[serde(default)]
     pub enabled_dictionary_packs: Vec<String>,
+    /// DotFlow: optional per-task local-model overrides — role (e.g. `"transform"`, later `"soap"`,
+    /// `"translate"`) → absolute GGUF path. A role absent (or mapped to an empty string) falls back to
+    /// [`Self::local_llm_model_path`] (the default/chat model). Lets a user run, say, a small fast Gemma for
+    /// quick transforms while the chat uses a larger reasoning model. Default empty = everything uses default.
+    #[serde(default)]
+    pub task_models: std::collections::HashMap<String, String>,
+    /// DotFlow: when true, AI transforms (Rewrite/Formal/Summarize) let a reasoning model think before
+    /// answering (no `/no_think`); slower but sometimes better on complex text. Default false = fast, direct.
+    #[serde(default)]
+    pub transform_reasoning: bool,
 }
 
 fn default_model() -> String {
@@ -963,10 +973,25 @@ pub fn get_default_settings() -> AppSettings {
         overlay_style: default_overlay_style(),
         local_llm_model_path: String::new(),
         enabled_dictionary_packs: Vec::new(),
+        task_models: std::collections::HashMap::new(),
+        transform_reasoning: false,
     }
 }
 
 impl AppSettings {
+    /// Resolve the local GGUF model path for a task `role`: its per-task override if set & non-empty, else
+    /// the default/chat model ([`Self::local_llm_model_path`]). Both are trimmed. Result may be empty if
+    /// neither is configured (the caller treats empty = no local model).
+    pub fn model_for_task(&self, role: &str) -> String {
+        if let Some(path) = self.task_models.get(role) {
+            let path = path.trim();
+            if !path.is_empty() {
+                return path.to_string();
+            }
+        }
+        self.local_llm_model_path.trim().to_string()
+    }
+
     pub fn active_post_process_provider(&self) -> Option<&PostProcessProvider> {
         self.post_process_providers
             .iter()
@@ -986,6 +1011,33 @@ impl AppSettings {
         self.post_process_providers
             .iter_mut()
             .find(|provider| provider.id == provider_id)
+    }
+}
+
+#[cfg(test)]
+mod task_model_tests {
+    use super::get_default_settings;
+
+    #[test]
+    fn model_for_task_prefers_override_else_default() {
+        let mut s = get_default_settings();
+        s.local_llm_model_path = "  /models/default.gguf  ".to_string();
+
+        // No override → the default/chat model (trimmed).
+        assert_eq!(s.model_for_task("transform"), "/models/default.gguf");
+
+        // Override set → it wins.
+        s.task_models
+            .insert("transform".to_string(), "/models/gemma.gguf".to_string());
+        assert_eq!(s.model_for_task("transform"), "/models/gemma.gguf");
+
+        // A different role with no override still falls back to the default.
+        assert_eq!(s.model_for_task("soap"), "/models/default.gguf");
+
+        // An empty/whitespace override falls back to the default (the "same as chat model" case).
+        s.task_models
+            .insert("transform".to_string(), "   ".to_string());
+        assert_eq!(s.model_for_task("transform"), "/models/default.gguf");
     }
 }
 

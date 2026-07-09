@@ -7,7 +7,8 @@ import { ToggleSwitch } from "../../ui/ToggleSwitch";
 import { ShortcutInput } from "../ShortcutInput";
 import { ReviewPanel } from "./ReviewPanel";
 import { LlmModelPicker } from "./LlmModelPicker";
-import { DictionaryPacks } from "./DictionaryPacks";
+import { TaskModelSelect } from "../TaskModelSelect";
+import { TransformReasoningToggle } from "../TransformReasoningToggle";
 import { useSettings } from "../../../hooks/useSettings";
 import { commands } from "@/bindings";
 
@@ -124,9 +125,25 @@ export const CleanupSettings: React.FC = () => {
         )}
       </SettingsGroup>
 
-      <DictionaryPacks />
-
       <LlmModelPicker />
+
+      <SettingsGroup
+        title={t("settings.cleanup.groups.transformModel", "Transforms model")}
+      >
+        <TaskModelSelect
+          role="transform"
+          title={t(
+            "settings.taskModel.transform.title",
+            "Model for quick transforms",
+          )}
+          description={t(
+            "settings.taskModel.transform.description",
+            "Which local model runs Rewrite / Formal / Summarize. Pick a small, fast model (e.g. Gemma) here while your chat uses a larger one. “Same as chat model” uses whatever you selected in the AI Chat dropdown.",
+          )}
+          grouped={true}
+        />
+        <TransformReasoningToggle />
+      </SettingsGroup>
 
       <SettingsGroup title={t("settings.cleanup.groups.tryIt", "Try it")}>
         <div className="p-4 space-y-3">

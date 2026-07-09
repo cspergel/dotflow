@@ -318,6 +318,51 @@ pub fn delete_llm_model(app: AppHandle, id: String) -> Result<(), String> {
     Ok(())
 }
 
+/// Get the per-task model override for `role` (e.g. `"transform"`). Returns the stored GGUF path, or an
+/// empty string when the role has no override (i.e. it uses the default/chat model). The UI shows empty as
+/// "Same as chat model".
+#[tauri::command]
+#[specta::specta]
+pub fn get_task_model(app: AppHandle, role: String) -> String {
+    get_settings(&app)
+        .task_models
+        .get(&role)
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default()
+}
+
+/// Set (or clear) the per-task model override for `role`. An empty `path` clears the override so the role
+/// falls back to the default/chat model. A non-empty path is validated to be an existing `.gguf`.
+#[tauri::command]
+#[specta::specta]
+pub fn set_task_model(app: AppHandle, role: String, path: String) -> Result<(), String> {
+    let trimmed = path.trim().to_string();
+    if !trimmed.is_empty() {
+        let p = std::path::PathBuf::from(&trimmed);
+        let is_gguf = p
+            .extension()
+            .and_then(|x| x.to_str())
+            .map(|x| x.eq_ignore_ascii_case("gguf"))
+            == Some(true);
+        if !p.exists() {
+            return Err(format!("File not found: {}", p.display()));
+        }
+        if !is_gguf {
+            return Err("Not a .gguf model file".to_string());
+        }
+    }
+
+    let mut settings = get_settings(&app);
+    if trimmed.is_empty() {
+        settings.task_models.remove(&role);
+    } else {
+        settings.task_models.insert(role, trimmed);
+    }
+    write_settings(&app, settings);
+    let _ = app.emit("llm-models-updated", ());
+    Ok(())
+}
+
 /// A local GGUF model file present in the llm dir — a catalog download OR a user-imported model. Backs the
 /// chat model dropdown so ANY `.gguf` in the folder is selectable, not just curated catalog entries.
 #[derive(Debug, Clone, serde::Serialize, specta::Type)]
