@@ -387,6 +387,14 @@ async cancelReview() : Promise<null> {
 async getPendingReview() : Promise<[string, boolean] | null> {
     return await TAURI_INVOKE("get_pending_review");
 },
+async readPdfText(path: string) : Promise<Result<string, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("read_pdf_text", { path }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 async aiTransformCustom(text: string, instruction: string) : Promise<Result<string, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("ai_transform_custom", { text, instruction }) };

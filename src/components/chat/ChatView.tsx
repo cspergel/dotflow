@@ -21,6 +21,9 @@ import {
   Upload,
   Mic,
   Brain,
+  Paperclip,
+  FileText,
+  X,
 } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { commands, type LocalModelInfo } from "../../bindings";
@@ -92,6 +95,12 @@ export default function ChatView() {
       return next;
     });
   }, []);
+  // Attached PDF (text-extracted). Held as context and prepended to each send while attached.
+  const [attachedDoc, setAttachedDoc] = useState<{
+    name: string;
+    text: string;
+  } | null>(null);
+  const [attachError, setAttachError] = useState<string | null>(null);
   const turnIdRef = useRef(0);
   const scrollRef = useRef<HTMLDivElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
@@ -117,13 +126,35 @@ export default function ChatView() {
     }
   }, []);
 
-  // Live, approximate context-window usage (system prompt + transcript + what's being typed).
+  // Live, approximate context-window usage (system prompt + transcript + attached doc + what's being typed).
   const usedTokens = useMemo(() => {
     let sum = estimateTokens(SYSTEM_PROMPT) + estimateTokens(input);
     for (const m of messages) sum += estimateTokens(m.content);
+    if (attachedDoc) sum += estimateTokens(attachedDoc.text);
     return sum;
-  }, [messages, input]);
+  }, [messages, input, attachedDoc]);
   const ctxPct = Math.min(100, Math.round((usedTokens / ctxTokens) * 100));
+
+  // Attach a PDF: pick it, extract its text locally, hold it as context for the conversation.
+  const attachPdf = useCallback(async () => {
+    try {
+      const picked = await open({
+        multiple: false,
+        filters: [{ name: "PDF", extensions: ["pdf"] }],
+      });
+      if (typeof picked !== "string") return;
+      setAttachError(null);
+      const res = await commands.readPdfText(picked);
+      if (res.status === "ok") {
+        const name = picked.split(/[\\/]/).pop() || "document.pdf";
+        setAttachedDoc({ name, text: res.data });
+      } else {
+        setAttachError(res.error);
+      }
+    } catch {
+      /* dialog cancelled */
+    }
+  }, []);
 
   const refreshModels = useCallback(async () => {
     try {
@@ -200,8 +231,12 @@ export default function ChatView() {
   }, [input]);
 
   const send = useCallback(async () => {
-    const text = input.trim();
-    if (!text || streaming) return;
+    if (streaming) return;
+    // With a document attached, an empty box means "summarize it".
+    const text =
+      input.trim() ||
+      (attachedDoc ? "Please summarize the attached document." : "");
+    if (!text) return;
     let id = activeId;
     if (!id) {
       id = newId();
@@ -217,8 +252,20 @@ export default function ChatView() {
     setMessages(next);
     setInput("");
     setStreaming(true);
+    // Inject the attached document as a context turn (kept out of the visible transcript) so it's available
+    // every turn while attached — enabling follow-up questions about it.
+    const docContext = attachedDoc
+      ? [
+          {
+            role: "user",
+            content: `The user attached a document titled "${attachedDoc.name}". Use it to answer their requests.\n\n<document>\n${attachedDoc.text}\n</document>`,
+          },
+          { role: "assistant", content: "I've read the document." },
+        ]
+      : [];
     const payload = [
       { role: "system", content: SYSTEM_PROMPT + reasonSuffix(reason) },
+      ...docContext,
       ...next.slice(0, -1).map((m) => ({ role: m.role, content: m.content })),
     ];
     const res = await commands.chatStream(turn, payload, ctxTokens);
@@ -226,7 +273,7 @@ export default function ChatView() {
       setMessages((m) => replaceLastAssistant(m, res.error, true));
       setStreaming(false);
     }
-  }, [input, streaming, messages, activeId, ctxTokens, reason]);
+  }, [input, streaming, messages, activeId, ctxTokens, reason, attachedDoc]);
 
   const stop = useCallback(async () => {
     await commands.chatCancel(turnIdRef.current);
@@ -552,7 +599,41 @@ export default function ChatView() {
 
         {/* Composer */}
         <div className="border-t border-neutral-200 px-4 py-2 dark:border-neutral-800">
+          {(attachedDoc || attachError) && (
+            <div className="mx-auto mb-1.5 max-w-3xl">
+              {attachedDoc && (
+                <div className="inline-flex items-center gap-1.5 rounded-lg border border-neutral-300 bg-neutral-100 px-2 py-1 text-xs dark:border-neutral-700 dark:bg-neutral-800">
+                  <FileText size={12} className="text-emerald-600" />
+                  <span
+                    className="max-w-[220px] truncate"
+                    title={attachedDoc.name}
+                  >
+                    {attachedDoc.name}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setAttachedDoc(null)}
+                    className="text-neutral-400 hover:text-red-500"
+                    title={t("chat.removeDoc", "Remove")}
+                  >
+                    <X size={12} />
+                  </button>
+                </div>
+              )}
+              {attachError && (
+                <div className="mt-1 text-xs text-red-500">{attachError}</div>
+              )}
+            </div>
+          )}
           <div className="mx-auto flex max-w-3xl items-end gap-1.5 rounded-xl border border-neutral-300 bg-neutral-50 px-2.5 py-1.5 shadow-sm focus-within:border-emerald-400 focus-within:ring-2 focus-within:ring-emerald-100 dark:border-neutral-700 dark:bg-neutral-900/40 dark:focus-within:ring-emerald-900/30">
+            <button
+              type="button"
+              onClick={() => void attachPdf()}
+              title={t("chat.attachPdf", "Attach a PDF")}
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-neutral-500 hover:bg-neutral-200 dark:hover:bg-neutral-700"
+            >
+              <Paperclip size={15} />
+            </button>
             <textarea
               ref={taRef}
               rows={1}
@@ -592,7 +673,7 @@ export default function ChatView() {
               <button
                 type="button"
                 onClick={() => void send()}
-                disabled={!input.trim()}
+                disabled={!input.trim() && !attachedDoc}
                 className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-emerald-600 text-white disabled:opacity-40"
                 title={t("chat.send")}
               >
