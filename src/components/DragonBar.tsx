@@ -1,5 +1,5 @@
 import React from "react";
-import { Maximize2, Mic, Minimize2 } from "lucide-react";
+import { Bot, Maximize2, Mic, Minimize2 } from "lucide-react";
 import HandyTextLogo from "./icons/HandyTextLogo";
 import { useSettings } from "../hooks/useSettings";
 
@@ -26,12 +26,16 @@ const prettyKey = (binding?: string): string | null => {
 interface DragonBarProps {
   onExpand: () => void;
   onShrink: () => void;
+  onToggleChat: () => void;
+  chatOpen: boolean;
   isDictating: boolean;
 }
 
 export const DragonBar: React.FC<DragonBarProps> = ({
   onExpand,
   onShrink,
+  onToggleChat,
+  chatOpen,
   isDictating,
 }) => {
   const { settings } = useSettings();
@@ -41,7 +45,7 @@ export const DragonBar: React.FC<DragonBarProps> = ({
   return (
     <div
       data-tauri-drag-region
-      className="group h-screen w-screen flex items-center gap-2 px-3 select-none cursor-default"
+      className="group h-full w-full flex items-center gap-2 px-3 select-none cursor-default"
     >
       {/* mic puck — amber on standby, green while dictating */}
       <div
@@ -80,6 +84,17 @@ export const DragonBar: React.FC<DragonBarProps> = ({
             </kbd>
           </span>
         )}
+        <button
+          onClick={onToggleChat}
+          title="Quick chat"
+          className={`flex items-center justify-center h-6 w-6 rounded-md transition-colors ${
+            chatOpen
+              ? "bg-logo-primary/15 text-logo-primary"
+              : "text-text/50 hover:bg-mid-gray/10 hover:text-logo-primary"
+          }`}
+        >
+          <Bot size={13} />
+        </button>
         <button
           onClick={onShrink}
           title="Shrink to mini bar"

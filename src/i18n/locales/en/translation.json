@@ -47,7 +47,10 @@
     "empty": "Ask your offline model anything.",
     "placeholder": "Ask anything…  (Enter to send, Shift+Enter for newline)",
     "send": "Send",
-    "stop": "Stop"
+    "stop": "Stop",
+    "voice": "Voice input (dictate into the box)",
+    "quickTitle": "Quick chat",
+    "quickPlaceholder": "Ask a quick question…"
   },
   "onboarding": {
     "subtitle": "To get started, choose a transcription model",

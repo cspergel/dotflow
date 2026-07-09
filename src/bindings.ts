@@ -417,6 +417,22 @@ async chatCancel(id: number) : Promise<Result<null, string>> {
 async chatAvailable() : Promise<boolean> {
     return await TAURI_INVOKE("chat_available");
 },
+async chatDictateStart() : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("chat_dictate_start") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async chatDictateStop() : Promise<Result<string, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("chat_dictate_stop") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 async listLlmModels() : Promise<LlmModelInfo[]> {
     return await TAURI_INVOKE("list_llm_models");
 },

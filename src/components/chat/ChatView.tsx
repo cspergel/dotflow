@@ -18,9 +18,11 @@ import {
   Copy,
   Check,
   Upload,
+  Mic,
 } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { commands, type LocalModelInfo } from "../../bindings";
+import { sanitize, parseThinking } from "./chatText";
 
 // A light default persona so the local model is a genuinely helpful assistant rather than over-refusing.
 // It is prepended to the request only — never shown in the transcript or stored in history.
@@ -76,44 +78,6 @@ function newId(): string {
   }
 }
 
-// Some models leak a trailing chat-template marker into their reply (e.g. Gemma emitting `<|im_end|>` /
-// `|im_end|>`, or `<end_of_turn>`) when the tokenizer doesn't treat it as a stop token. Cut the text at the
-// first such marker for display/copy. (The backend also cleans this, but robustly here covers partial
-// variants like a `|im_end|>` whose leading `<` tokenized separately.)
-function sanitize(text: string): string {
-  let out = text;
-  for (const marker of [
-    "<|im_end|>",
-    "|im_end|>",
-    "<|im_start|>",
-    "<end_of_turn>",
-    "<start_of_turn>",
-    "<eos>",
-    "</s>",
-    "<|endoftext|>",
-  ]) {
-    const idx = out.indexOf(marker);
-    if (idx !== -1) out = out.slice(0, idx);
-  }
-  return out;
-}
-
-// Reasoning models (Qwen3.x / Qwythos, DeepSeek-R1, …) emit their chain-of-thought in `<think>…</think>`
-// before the answer. Split it out so the UI can hide the reasoning by default (collapsible) and show just
-// the answer. Handles the mid-stream case where `<think>` is open but not yet closed.
-function parseThinking(text: string): { thinking: string | null; answer: string } {
-  const start = text.indexOf("<think>");
-  if (start === -1) return { thinking: null, answer: text };
-  const end = text.indexOf("</think>");
-  if (end === -1) {
-    // Still thinking (stream hasn't closed the tag yet).
-    return { thinking: text.slice(start + 7).trim(), answer: "" };
-  }
-  const thinking = text.slice(start + 7, end).trim();
-  const answer = (text.slice(0, start) + text.slice(end + 8)).trim();
-  return { thinking, answer };
-}
-
 function appendToLastAssistant(msgs: Msg[], text: string): Msg[] {
   const last = msgs[msgs.length - 1];
   if (!last || last.role !== "assistant") return msgs;
@@ -144,6 +108,7 @@ export default function ChatView() {
   const [streaming, setStreaming] = useState(false);
   const [models, setModels] = useState<LocalModelInfo[]>([]);
   const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
+  const [recording, setRecording] = useState(false);
   const [ctxTokens, setCtxTokens] = useState<number>(() => {
     const v = parseInt(localStorage.getItem("dotflow.chat.ctx") ?? "8192", 10);
     return Number.isFinite(v) && v >= 512 ? v : 8192;
@@ -263,6 +228,23 @@ export default function ChatView() {
   const stop = useCallback(async () => {
     await commands.chatCancel(turnIdRef.current);
   }, []);
+
+  // Voice input: toggle mic recording; on stop, append the returned transcript to the composer. Reuses the
+  // dictation pipeline but RETURNS text (no paste), so it lands reliably in the box.
+  const toggleMic = useCallback(async () => {
+    if (recording) {
+      setRecording(false);
+      const res = await commands.chatDictateStop();
+      if (res.status === "ok" && res.data.trim()) {
+        const t = res.data.trim();
+        setInput((prev) => (prev.trim() ? prev.trimEnd() + " " + t : t));
+      }
+    } else {
+      const res = await commands.chatDictateStart();
+      if (res.status === "ok") setRecording(true);
+      // else: another dictation is active or no mic — ignore.
+    }
+  }, [recording]);
 
   const newChat = useCallback(() => {
     if (streaming) return;
@@ -564,6 +546,18 @@ export default function ChatView() {
                 }
               }}
             />
+            <button
+              type="button"
+              onClick={() => void toggleMic()}
+              className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl transition-colors ${
+                recording
+                  ? "animate-pulse bg-red-500 text-white"
+                  : "text-neutral-500 hover:bg-neutral-200 dark:hover:bg-neutral-700"
+              }`}
+              title={t("chat.voice")}
+            >
+              <Mic size={15} />
+            </button>
             {streaming ? (
               <button
                 type="button"

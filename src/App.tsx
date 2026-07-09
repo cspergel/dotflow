@@ -13,6 +13,7 @@ import AccessibilityPermissions from "./components/AccessibilityPermissions";
 import Footer from "./components/footer";
 import Onboarding, { AccessibilityOnboarding } from "./components/onboarding";
 import { Sidebar, SidebarSection, SECTIONS_CONFIG } from "./components/Sidebar";
+import QuickChat from "./components/chat/QuickChat";
 import { TitleBar } from "./components/TitleBar";
 import { DragonBar } from "./components/DragonBar";
 import { MiniBar } from "./components/MiniBar";
@@ -47,9 +48,12 @@ function App() {
   const [viewMode, setViewMode] = useState<"full" | "bar" | "mini">("full");
   // Live dictation state (backend emits on record start/stop) — colors the compact bars.
   const [isDictating, setIsDictating] = useState(false);
+  // Quick-chat slide-out from the compact bar (grows the window when open).
+  const [quickChatOpen, setQuickChatOpen] = useState(false);
 
   const applyViewMode = async (mode: "full" | "bar" | "mini") => {
     setViewMode(mode);
+    setQuickChatOpen(false);
     try {
       const win = getCurrentWindow();
       if (mode === "mini") {
@@ -71,6 +75,18 @@ function App() {
       }
     } catch (e) {
       console.warn("Failed to resize window for view mode:", e);
+    }
+  };
+
+  // Toggle the quick-chat panel in the compact bar, growing/shrinking the window to fit it.
+  const toggleQuickChat = async () => {
+    const next = !quickChatOpen;
+    setQuickChatOpen(next);
+    try {
+      const win = getCurrentWindow();
+      await win.setSize(new LogicalSize(360, next ? 440 : 44));
+    } catch (e) {
+      console.warn("Failed to resize window for quick chat:", e);
     }
   };
   const { settings, updateSetting } = useSettings();
@@ -325,13 +341,22 @@ function App() {
   // Dragon-style compact bar: dictation status + shortcut. Expands to the full app, or shrinks to mini.
   if (viewMode === "bar") {
     return (
-      <div dir={direction} className="h-screen bg-background">
+      <div dir={direction} className="h-screen bg-background flex flex-col">
         <Toaster theme="system" />
-        <DragonBar
-          onExpand={() => applyViewMode("full")}
-          onShrink={() => applyViewMode("mini")}
-          isDictating={isDictating}
-        />
+        <div className="h-11 shrink-0">
+          <DragonBar
+            onExpand={() => applyViewMode("full")}
+            onShrink={() => applyViewMode("mini")}
+            onToggleChat={() => void toggleQuickChat()}
+            chatOpen={quickChatOpen}
+            isDictating={isDictating}
+          />
+        </div>
+        {quickChatOpen && (
+          <div className="flex-1 min-h-0 border-t border-hairline">
+            <QuickChat />
+          </div>
+        )}
       </div>
     );
   }

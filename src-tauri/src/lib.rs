@@ -699,6 +699,8 @@ pub fn run(cli_args: CliArgs) {
             commands::chat::chat_stream,
             commands::chat::chat_cancel,
             commands::chat::chat_available,
+            commands::chat_dictate::chat_dictate_start,
+            commands::chat_dictate::chat_dictate_stop,
             commands::llm::list_llm_models,
             commands::llm::list_local_models,
             commands::llm::set_local_model,
