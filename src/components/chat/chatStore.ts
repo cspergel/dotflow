@@ -19,6 +19,29 @@ export const STORAGE_KEY = "dotflow.chat.conversations.v1";
 export const OPEN_KEY = "dotflow.chat.openId";
 // The slide-out records its current conversation id here so expand-to-full knows what to open.
 export const QUICK_CONV_KEY = "dotflow.chat.quickConvId";
+// Shared "let the model reason" toggle for the chat surfaces (full + slide-out). Off appends /no_think for a
+// fast, direct answer; on lets a reasoning model (Qwythos/Qwen3.x) think first for complex questions.
+export const CHAT_REASON_KEY = "dotflow.chat.reason";
+
+export function loadReason(): boolean {
+  try {
+    return localStorage.getItem(CHAT_REASON_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+export function saveReason(v: boolean) {
+  try {
+    localStorage.setItem(CHAT_REASON_KEY, String(v));
+  } catch {
+    /* best-effort */
+  }
+}
+
+/// The system-prompt suffix that disables reasoning when the toggle is off. Empty when reasoning is on.
+export function reasonSuffix(reason: boolean): string {
+  return reason ? "" : "\n\n/no_think";
+}
 
 export function loadConversations(): Conversation[] {
   try {

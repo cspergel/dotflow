@@ -12,7 +12,7 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { LogicalSize } from "@tauri-apps/api/dpi";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ChevronRight, Mic, ArrowRight } from "lucide-react";
+import { ChevronRight, Mic, ArrowRight, Brain } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { commands } from "@/bindings";
 import { ReviewPanel } from "@/components/settings/cleanup/ReviewPanel";
@@ -72,6 +72,23 @@ const ReviewOverlay: React.FC = () => {
   const cmdRef = useRef<HTMLTextAreaElement>(null);
   // Dictate into the command input ("or say what to do"), reusing the chat dictation pipeline.
   const { recording, toggleMic } = useChatDictation(setCommandText);
+  // Reasoning toggle for transforms/commands — persisted (same `transform_reasoning` setting as Cleanup).
+  const [reason, setReason] = useState(false);
+  useEffect(() => {
+    commands
+      .getTransformReasoning()
+      .then(setReason)
+      .catch(() => {
+        /* keep default */
+      });
+  }, []);
+  const toggleReason = useCallback(() => {
+    setReason((r) => {
+      const next = !r;
+      void commands.setTransformReasoning(next);
+      return next;
+    });
+  }, []);
 
   // Listeners + pull-on-mount [F11]. The backend emits "review-text" immediately after show(), which can
   // race this effect's listener registration, so we also PULL the stored payload via getPendingReview();
@@ -411,11 +428,29 @@ const ReviewOverlay: React.FC = () => {
             <ArrowRight size={14} />
           </button>
         </div>
-        <div className="mt-1 px-0.5 text-[10px] text-faint">
-          {t(
-            "settings.review.commandHint",
-            "e.g. “make this a bullet list”, “translate to Spanish”",
-          )}
+        <div className="mt-1 flex items-center justify-between gap-2 px-0.5">
+          <span className="text-[10px] text-faint">
+            {t(
+              "settings.review.commandHint",
+              "e.g. “make this a bullet list”, “translate to Spanish”",
+            )}
+          </span>
+          <button
+            type="button"
+            onClick={toggleReason}
+            title={t(
+              "settings.review.reasonHint",
+              "Reasoning: let the model think first (slower, better on complex text)",
+            )}
+            className={`flex shrink-0 items-center gap-1 rounded-md border px-1.5 py-0.5 text-[10px] transition-colors ${
+              reason
+                ? "border-accent bg-accent-tint text-accent"
+                : "border-hairline-strong text-muted hover:bg-inset"
+            }`}
+          >
+            <Brain size={11} />
+            {t("settings.review.reason", "Reason")}
+          </button>
         </div>
       </div>
 

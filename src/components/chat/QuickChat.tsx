@@ -1,7 +1,15 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { useTranslation } from "react-i18next";
-import { Send, Square, Mic, History, Plus, MessageSquare } from "lucide-react";
+import {
+  Send,
+  Square,
+  Mic,
+  History,
+  Plus,
+  MessageSquare,
+  Brain,
+} from "lucide-react";
 import { commands } from "../../bindings";
 import { sanitize, parseThinking } from "./chatText";
 import { useChatDictation } from "./useChatDictation";
@@ -10,6 +18,9 @@ import {
   loadConversations,
   titleFrom,
   newId,
+  loadReason,
+  saveReason,
+  reasonSuffix,
   QUICK_CONV_KEY,
   type Conversation,
 } from "./chatStore";
@@ -38,6 +49,7 @@ export default function QuickChat() {
   const { recording, toggleMic } = useChatDictation(setInput);
   const [showHistory, setShowHistory] = useState(false);
   const [recent, setRecent] = useState<Conversation[]>([]);
+  const [reason, setReason] = useState<boolean>(loadReason);
   const turnIdRef = useRef(0);
   const convIdRef = useRef<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -147,7 +159,7 @@ export default function QuickChat() {
     setInput("");
     setStreaming(true);
     const payload = [
-      { role: "system", content: QUICK_SYSTEM },
+      { role: "system", content: QUICK_SYSTEM + reasonSuffix(reason) },
       ...next.slice(0, -1).map((m) => ({ role: m.role, content: m.content })),
     ];
     const res = await commands.chatStream(turn, payload, 8192);
@@ -159,7 +171,7 @@ export default function QuickChat() {
       });
       setStreaming(false);
     }
-  }, [input, streaming, messages]);
+  }, [input, streaming, messages, reason]);
 
   return (
     <div className="relative flex h-full flex-col bg-background">
@@ -180,6 +192,24 @@ export default function QuickChat() {
         <span className="flex-1 truncate text-center text-[11px] text-neutral-400">
           {t("chat.quickTitle")}
         </span>
+        <button
+          type="button"
+          onClick={() => {
+            setReason((r) => {
+              const n = !r;
+              saveReason(n);
+              return n;
+            });
+          }}
+          title={t("chat.reasonHint", "Reasoning")}
+          className={`flex h-6 w-6 items-center justify-center rounded-md ${
+            reason
+              ? "bg-emerald-100 text-emerald-600 dark:bg-emerald-900/30"
+              : "text-neutral-500 hover:bg-neutral-200 dark:hover:bg-neutral-700"
+          }`}
+        >
+          <Brain size={13} />
+        </button>
         <button
           type="button"
           onClick={newQuick}

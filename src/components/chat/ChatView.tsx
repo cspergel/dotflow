@@ -20,6 +20,7 @@ import {
   Check,
   Upload,
   Mic,
+  Brain,
 } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { commands, type LocalModelInfo } from "../../bindings";
@@ -31,6 +32,9 @@ import {
   titleFrom,
   newId,
   estimateTokens,
+  loadReason,
+  saveReason,
+  reasonSuffix,
   OPEN_KEY,
   type ChatMsg as Msg,
   type Conversation,
@@ -80,6 +84,14 @@ export default function ChatView() {
     const v = parseInt(localStorage.getItem("dotflow.chat.ctx") ?? "8192", 10);
     return Number.isFinite(v) && v >= 512 ? v : 8192;
   });
+  const [reason, setReason] = useState<boolean>(loadReason);
+  const toggleReason = useCallback(() => {
+    setReason((r) => {
+      const next = !r;
+      saveReason(next);
+      return next;
+    });
+  }, []);
   const turnIdRef = useRef(0);
   const scrollRef = useRef<HTMLDivElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
@@ -184,7 +196,7 @@ export default function ChatView() {
     const el = taRef.current;
     if (!el) return;
     el.style.height = "auto";
-    el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
+    el.style.height = `${Math.min(el.scrollHeight, 140)}px`;
   }, [input]);
 
   const send = useCallback(async () => {
@@ -206,7 +218,7 @@ export default function ChatView() {
     setInput("");
     setStreaming(true);
     const payload = [
-      { role: "system", content: SYSTEM_PROMPT },
+      { role: "system", content: SYSTEM_PROMPT + reasonSuffix(reason) },
       ...next.slice(0, -1).map((m) => ({ role: m.role, content: m.content })),
     ];
     const res = await commands.chatStream(turn, payload, ctxTokens);
@@ -214,7 +226,7 @@ export default function ChatView() {
       setMessages((m) => replaceLastAssistant(m, res.error, true));
       setStreaming(false);
     }
-  }, [input, streaming, messages, activeId, ctxTokens]);
+  }, [input, streaming, messages, activeId, ctxTokens, reason]);
 
   const stop = useCallback(async () => {
     await commands.chatCancel(turnIdRef.current);
@@ -434,6 +446,22 @@ export default function ChatView() {
                 pct: ctxPct,
               })}
             </span>
+            <button
+              type="button"
+              onClick={toggleReason}
+              title={t(
+                "chat.reasonHint",
+                "Reasoning: let the model think before answering (slower, better on complex questions)",
+              )}
+              className={`ml-1 flex items-center gap-1 rounded-md border px-1.5 py-1 text-xs transition-colors ${
+                reason
+                  ? "border-emerald-400 bg-emerald-50 text-emerald-600 dark:bg-emerald-900/20"
+                  : "border-neutral-300 text-neutral-500 hover:bg-neutral-100 dark:border-neutral-700 dark:hover:bg-neutral-800"
+              }`}
+            >
+              <Brain size={13} />
+              {t("chat.reason", "Reason")}
+            </button>
           </div>
         </div>
 
@@ -523,14 +551,14 @@ export default function ChatView() {
         </div>
 
         {/* Composer */}
-        <div className="border-t border-neutral-200 px-4 py-3 dark:border-neutral-800">
-          <div className="mx-auto flex max-w-3xl items-end gap-2 rounded-2xl border border-neutral-300 bg-neutral-50 px-3 py-2 shadow-sm focus-within:border-emerald-400 focus-within:ring-2 focus-within:ring-emerald-100 dark:border-neutral-700 dark:bg-neutral-900/40 dark:focus-within:ring-emerald-900/30">
+        <div className="border-t border-neutral-200 px-4 py-2 dark:border-neutral-800">
+          <div className="mx-auto flex max-w-3xl items-end gap-1.5 rounded-xl border border-neutral-300 bg-neutral-50 px-2.5 py-1.5 shadow-sm focus-within:border-emerald-400 focus-within:ring-2 focus-within:ring-emerald-100 dark:border-neutral-700 dark:bg-neutral-900/40 dark:focus-within:ring-emerald-900/30">
             <textarea
               ref={taRef}
               rows={1}
               value={input}
               placeholder={t("chat.placeholder")}
-              className="max-h-[160px] flex-1 resize-none overflow-y-auto bg-transparent py-1.5 text-[15px] leading-relaxed outline-none placeholder:text-neutral-400"
+              className="max-h-[140px] flex-1 resize-none overflow-y-auto bg-transparent py-1 text-sm leading-normal outline-none placeholder:text-neutral-400"
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === "Enter" && !e.shiftKey) {
@@ -542,7 +570,7 @@ export default function ChatView() {
             <button
               type="button"
               onClick={() => void toggleMic(input)}
-              className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl transition-colors ${
+              className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-colors ${
                 recording
                   ? "animate-pulse bg-red-500 text-white"
                   : "text-neutral-500 hover:bg-neutral-200 dark:hover:bg-neutral-700"
@@ -555,7 +583,7 @@ export default function ChatView() {
               <button
                 type="button"
                 onClick={() => void stop()}
-                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-neutral-800 text-white"
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-neutral-800 text-white"
                 title={t("chat.stop")}
               >
                 <Square size={15} />
@@ -565,7 +593,7 @@ export default function ChatView() {
                 type="button"
                 onClick={() => void send()}
                 disabled={!input.trim()}
-                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-emerald-600 text-white disabled:opacity-40"
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-emerald-600 text-white disabled:opacity-40"
                 title={t("chat.send")}
               >
                 <Send size={15} />
