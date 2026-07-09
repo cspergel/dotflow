@@ -12,6 +12,7 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { LogicalSize } from "@tauri-apps/api/dpi";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { ChevronRight } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { commands } from "@/bindings";
 import { ReviewPanel } from "@/components/settings/cleanup/ReviewPanel";
@@ -57,6 +58,9 @@ const ReviewOverlay: React.FC = () => {
   // note instead of a silent no-op. `actionError` surfaces Apply/Copy failures inline in the card.
   const [aiEmpty, setAiEmpty] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  // The "Before" (original selection) box starts collapsed for AI actions so the result is visible without
+  // scrolling; the user can expand it to compare. Reset to collapsed on each new selection / action run.
+  const [showBefore, setShowBefore] = useState(false);
   const cardRef = useRef<HTMLDivElement>(null);
 
   // Listeners + pull-on-mount [F11]. The backend emits "review-text" immediately after show(), which can
@@ -77,6 +81,7 @@ const ReviewOverlay: React.FC = () => {
       setAiLoading(false);
       setAiEmpty(false);
       setActionError(null);
+      setShowBefore(false);
     };
 
     const setup = async () => {
@@ -177,6 +182,7 @@ const ReviewOverlay: React.FC = () => {
     setAiLoading(true);
     setAiError(null);
     setAiResult("");
+    setShowBefore(false); // each action starts with the original collapsed so the result leads
     // Clear any stale result from a previous action so Apply/Copy can't paste the WRONG output during the
     // "Working…" window: `reviewResult || text` now falls back to the original text, not the prior result.
     setReviewResult("");
@@ -342,13 +348,24 @@ const ReviewOverlay: React.FC = () => {
           </div>
         ) : (
           <div className="space-y-2.5">
+            {/* Original selection — collapsed by default so the result leads; click to compare. */}
             <div>
-              <div className="mb-1 text-[10px] font-medium tracking-wide text-faint uppercase">
+              <button
+                type="button"
+                onClick={() => setShowBefore((v) => !v)}
+                className="mb-1 flex items-center gap-1 text-[10px] font-medium tracking-wide text-faint uppercase hover:text-muted"
+              >
+                <ChevronRight
+                  size={11}
+                  className={`transition-transform ${showBefore ? "rotate-90" : ""}`}
+                />
                 {t("settings.review.before", "Before")}
-              </div>
-              <div className="rounded-lg border border-hairline bg-panel px-3 py-2 text-sm whitespace-pre-wrap text-muted">
-                {text}
-              </div>
+              </button>
+              {showBefore && (
+                <div className="rounded-lg border border-hairline bg-panel px-3 py-2 text-sm whitespace-pre-wrap text-muted">
+                  {text}
+                </div>
+              )}
             </div>
             <div>
               <div className="mb-1 text-[10px] font-medium tracking-wide text-faint uppercase">
