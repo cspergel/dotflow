@@ -700,6 +700,8 @@ pub fn run(cli_args: CliArgs) {
             commands::chat::chat_cancel,
             commands::chat::chat_available,
             commands::llm::list_llm_models,
+            commands::llm::list_local_models,
+            commands::llm::set_local_model,
             commands::llm::download_llm_model,
             commands::llm::cancel_llm_download,
             commands::llm::select_llm_model,

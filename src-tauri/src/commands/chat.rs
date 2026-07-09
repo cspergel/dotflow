@@ -105,10 +105,11 @@ pub async fn chat_stream(
     app: AppHandle,
     id: u64,
     messages: Vec<ChatMessage>,
+    n_ctx: u32,
 ) -> Result<(), String> {
     #[cfg(not(feature = "local-llm"))]
     {
-        let _ = (&app, id, &messages);
+        let _ = (&app, id, &messages, n_ctx);
         Err("This build was compiled without local model support.".to_string())
     }
 
@@ -143,6 +144,10 @@ pub async fn chat_stream(
             })
             .collect();
 
+        // Context window: 0 means "use the default"; otherwise the value the chat UI's setting chose. The
+        // engine clamps this to what the model was actually trained on.
+        let n_ctx = if n_ctx == 0 { 8192 } else { n_ctx };
+
         // Drop any stale cancel flag from a previous turn that reused this id.
         clear_cancel(id);
 
@@ -153,6 +158,7 @@ pub async fn chat_stream(
                 &model_path,
                 &turns,
                 1024,
+                n_ctx,
                 |piece| {
                     let _ = app_tok.emit(
                         "chat-token",

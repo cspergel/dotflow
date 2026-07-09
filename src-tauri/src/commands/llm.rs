@@ -317,3 +317,85 @@ pub fn delete_llm_model(app: AppHandle, id: String) -> Result<(), String> {
     let _ = app.emit("llm-models-updated", ());
     Ok(())
 }
+
+/// A local GGUF model file present in the llm dir — a catalog download OR a user-imported model. Backs the
+/// chat model dropdown so ANY `.gguf` in the folder is selectable, not just curated catalog entries.
+#[derive(Debug, Clone, serde::Serialize, specta::Type)]
+pub struct LocalModelInfo {
+    /// Display name: the catalog name if the file matches a catalog entry, else the bare filename.
+    pub name: String,
+    /// Absolute path to the `.gguf` file.
+    pub path: String,
+    pub size_bytes: u64,
+    /// True if this file is the currently-selected local model (`settings.local_llm_model_path`).
+    pub active: bool,
+}
+
+/// List every `*.gguf` in the llm dir (catalog + imported), sorted by display name, marking the active one.
+/// This is what the chat model dropdown uses so a hand-dropped model (e.g. Qwythos) shows up and is
+/// selectable — unlike [`list_llm_models`], which only reports the curated catalog.
+#[tauri::command]
+#[specta::specta]
+pub fn list_local_models(app: AppHandle) -> Vec<LocalModelInfo> {
+    let dir = llm_catalog::llm_dir(&app);
+    let active = get_settings(&app).local_llm_model_path.trim().to_string();
+    let active_path = std::path::PathBuf::from(&active);
+    let catalog = llm_catalog::catalog();
+    let mut out: Vec<LocalModelInfo> = Vec::new();
+    if let Ok(entries) = fs::read_dir(&dir) {
+        for entry in entries.flatten() {
+            let p = entry.path();
+            let is_gguf = p
+                .extension()
+                .and_then(|x| x.to_str())
+                .map(|x| x.eq_ignore_ascii_case("gguf"))
+                == Some(true);
+            if !is_gguf {
+                continue;
+            }
+            let filename = match p.file_name().and_then(|f| f.to_str()) {
+                Some(f) if !f.is_empty() => f.to_string(),
+                _ => continue,
+            };
+            let size_bytes = entry.metadata().map(|m| m.len()).unwrap_or(0);
+            let name = catalog
+                .iter()
+                .find(|m| m.filename == filename)
+                .map(|m| m.name.clone())
+                .unwrap_or_else(|| filename.clone());
+            out.push(LocalModelInfo {
+                name,
+                path: p.to_string_lossy().to_string(),
+                size_bytes,
+                active: p == active_path,
+            });
+        }
+    }
+    out.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    out
+}
+
+/// Point the active local model at an arbitrary existing `.gguf` (a user-imported model, or one picked from
+/// [`list_local_models`]). Persists via the settings store, so it sticks across restarts — the fix for a
+/// hand-set path not surviving. Validates the file exists and is a `.gguf`.
+#[tauri::command]
+#[specta::specta]
+pub fn set_local_model(app: AppHandle, path: String) -> Result<(), String> {
+    let p = std::path::PathBuf::from(path.trim());
+    if !p.exists() {
+        return Err(format!("File not found: {}", p.display()));
+    }
+    let is_gguf = p
+        .extension()
+        .and_then(|x| x.to_str())
+        .map(|x| x.eq_ignore_ascii_case("gguf"))
+        == Some(true);
+    if !is_gguf {
+        return Err("Not a .gguf model file".to_string());
+    }
+    let mut settings = get_settings(&app);
+    settings.local_llm_model_path = p.to_string_lossy().to_string();
+    write_settings(&app, settings);
+    let _ = app.emit("llm-models-updated", ());
+    Ok(())
+}

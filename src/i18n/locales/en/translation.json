@@ -27,6 +27,12 @@
   },
   "chat": {
     "model": "Model",
+    "selectModel": "Select a model…",
+    "import": "Import",
+    "importModel": "Import a .gguf model from disk",
+    "context": "Context",
+    "contextHint": "Context window (tokens). Higher = longer memory but more VRAM; capped at the model's trained max.",
+    "tokensK": "{{count}}k",
     "noModel": "No local model — download one in Models",
     "newChat": "New chat",
     "toggleHistory": "Toggle history",

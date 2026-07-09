@@ -216,6 +216,7 @@ pub fn generate_chat_stream(
     model_path: &Path,
     messages: &[ChatTurn],
     max_new_tokens: usize,
+    n_ctx: u32,
     mut on_token: impl FnMut(&str),
     should_cancel: &dyn Fn() -> bool,
 ) -> Result<String, String> {
@@ -228,6 +229,7 @@ pub fn generate_chat_stream(
                 &prompt,
                 add_bos,
                 max_new_tokens,
+                n_ctx,
                 &mut on_token,
                 should_cancel,
             )
@@ -389,8 +391,12 @@ fn clean_chat_output(s: &str) -> String {
     let mut end = s.len();
     for marker in [
         "<|im_end|>",
+        // Partial variant: some models emit `|im_end|>` when the leading `<` tokenizes into the prior
+        // piece, so the full `<|im_end|>` never appears as a contiguous substring (seen with Gemma).
+        "|im_end|>",
         "<end_of_turn>",
         "<|im_start|>",
+        "|im_start|>",
         "<eos>",
         "</s>",
         "<|endoftext|>",
@@ -416,6 +422,7 @@ fn generate_chat_inner(
             &prompt,
             add_bos,
             max_new_tokens,
+            8192,
             &mut |_| {},
             &|| false,
         )
@@ -435,6 +442,7 @@ fn generate_inner(
             prompt,
             AddBos::Always,
             max_new_tokens,
+            8192,
             &mut |_| {},
             &|| false,
         )
@@ -452,12 +460,15 @@ fn run_generation(
     prompt: &str,
     add_bos: AddBos,
     max_new_tokens: usize,
+    requested_n_ctx: u32,
     on_token: &mut dyn FnMut(&str),
     should_cancel: &dyn Fn() -> bool,
 ) -> Result<String, String> {
-    // A 4096-token context is plenty for a "rewrite this selection" round-trip. Cap it at what the
-    // model was actually trained on so we never ask for more than the weights support.
-    let n_ctx = 4096u32.min(model.n_ctx_train().max(1));
+    // Context window = what the caller asked for, floored at 512 and capped at what the model was actually
+    // trained on (so we never ask for more than the weights support — e.g. a 9B "1M" model still caps at its
+    // real trained length). The KV cache scales linearly with this, so the chat UI exposes it as a setting to
+    // trade VRAM for a longer memory.
+    let n_ctx = requested_n_ctx.clamp(512, model.n_ctx_train().max(512));
     let ctx_params = LlamaContextParams::default().with_n_ctx(Some(
         NonZeroU32::new(n_ctx).unwrap_or(NonZeroU32::new(2048).unwrap()),
     ));

@@ -398,9 +398,9 @@ async aiTransform(text: string, action: string) : Promise<Result<string, string>
 async aiTransformAvailable() : Promise<boolean> {
     return await TAURI_INVOKE("ai_transform_available");
 },
-async chatStream(id: number, messages: { role: string; content: string }[]) : Promise<Result<null, string>> {
+async chatStream(id: number, messages: { role: string; content: string }[], nCtx: number) : Promise<Result<null, string>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("chat_stream", { id, messages }) };
+    return { status: "ok", data: await TAURI_INVOKE("chat_stream", { id, messages, nCtx }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -419,6 +419,17 @@ async chatAvailable() : Promise<boolean> {
 },
 async listLlmModels() : Promise<LlmModelInfo[]> {
     return await TAURI_INVOKE("list_llm_models");
+},
+async listLocalModels() : Promise<LocalModelInfo[]> {
+    return await TAURI_INVOKE("list_local_models");
+},
+async setLocalModel(path: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("set_local_model", { path }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
 },
 async downloadLlmModel(id: string) : Promise<Result<null, string>> {
     try {
@@ -1093,6 +1104,7 @@ export type LLMPrompt = { id: string; name: string; prompt: string }
  * One curated local LLM the user can download to power the AI-transform actions.
  */
 export type LlmModelInfo = { id: string; name: string; params: string; size_bytes: number; license: string; commercial_ok: boolean; recommended: boolean; note: string; url: string; filename: string; downloaded: boolean; active: boolean }
+export type LocalModelInfo = { name: string; path: string; size_bytes: number; active: boolean }
 export type LogLevel = "trace" | "debug" | "info" | "warn" | "error"
 export type ModelInfo = { id: string; name: string; description: string; filename: string; source: ModelSource; size_mb: number; is_downloaded: boolean; is_downloading: boolean; partial_size: number; is_directory: boolean; engine_type: EngineType; accuracy_score: number; speed_score: number; supports_translation: boolean; is_recommended: boolean; supported_languages: string[]; supports_language_selection: boolean; is_custom: boolean; supports_streaming: boolean; supports_language_detection: boolean }
 export type ModelLoadStatus = { is_loaded: boolean; current_model: string | null }

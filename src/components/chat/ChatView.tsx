@@ -17,8 +17,10 @@ import {
   PanelLeftOpen,
   Copy,
   Check,
+  Upload,
 } from "lucide-react";
-import { commands, type LlmModelInfo } from "../../bindings";
+import { open } from "@tauri-apps/plugin-dialog";
+import { commands, type LocalModelInfo } from "../../bindings";
 
 // A light default persona so the local model is a genuinely helpful assistant rather than over-refusing.
 // It is prepended to the request only — never shown in the transcript or stored in history.
@@ -124,9 +126,12 @@ export default function ChatView() {
   const [messages, setMessages] = useState<Msg[]>([]);
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
-  const [models, setModels] = useState<LlmModelInfo[]>([]);
-  const [activeModelPath, setActiveModelPath] = useState<string>("");
+  const [models, setModels] = useState<LocalModelInfo[]>([]);
   const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
+  const [ctxTokens, setCtxTokens] = useState<number>(() => {
+    const v = parseInt(localStorage.getItem("dotflow.chat.ctx") ?? "8192", 10);
+    return Number.isFinite(v) && v >= 512 ? v : 8192;
+  });
   const turnIdRef = useRef(0);
   const scrollRef = useRef<HTMLDivElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
@@ -138,15 +143,9 @@ export default function ChatView() {
 
   const refreshModels = useCallback(async () => {
     try {
-      setModels(await commands.listLlmModels());
+      setModels(await commands.listLocalModels());
     } catch {
       /* keep prior models */
-    }
-    try {
-      const s = await commands.getAppSettings();
-      if (s.status === "ok") setActiveModelPath(s.data.local_llm_model_path ?? "");
-    } catch {
-      /* ignore */
     }
   }, []);
 
@@ -238,12 +237,12 @@ export default function ChatView() {
       { role: "system", content: SYSTEM_PROMPT },
       ...next.slice(0, -1).map((m) => ({ role: m.role, content: m.content })),
     ];
-    const res = await commands.chatStream(turn, payload);
+    const res = await commands.chatStream(turn, payload, ctxTokens);
     if (res.status === "error" && turn === turnIdRef.current) {
       setMessages((m) => replaceLastAssistant(m, res.error, true));
       setStreaming(false);
     }
-  }, [input, streaming, messages, activeId]);
+  }, [input, streaming, messages, activeId, ctxTokens]);
 
   const stop = useCallback(async () => {
     await commands.chatCancel(turnIdRef.current);
@@ -278,12 +277,29 @@ export default function ChatView() {
   );
 
   const onModelChange = useCallback(
-    async (id: string) => {
-      await commands.selectLlmModel(id);
+    async (path: string) => {
+      if (!path) return;
+      await commands.setLocalModel(path);
       await refreshModels();
     },
     [refreshModels],
   );
+
+  // Import any .gguf from disk and make it the active model (points at it in place; nothing is copied).
+  const importModel = useCallback(async () => {
+    try {
+      const picked = await open({
+        multiple: false,
+        filters: [{ name: "GGUF model", extensions: ["gguf"] }],
+      });
+      if (typeof picked === "string") {
+        const res = await commands.setLocalModel(picked);
+        if (res.status === "ok") await refreshModels();
+      }
+    } catch {
+      /* dialog cancelled or unavailable */
+    }
+  }, [refreshModels]);
 
   const toggleRail = useCallback(() => {
     setRailOpen((o) => {
@@ -297,14 +313,7 @@ export default function ChatView() {
     });
   }, []);
 
-  const downloaded = models.filter((m) => m.downloaded);
   const activeModel = models.find((m) => m.active);
-  // A model set outside the catalog (e.g. an imported/hand-set GGUF like Qwythos) — show its filename so the
-  // dropdown reflects what's actually loaded instead of misleadingly showing a catalog default.
-  const customModelName =
-    !activeModel && activeModelPath
-      ? (activeModelPath.split(/[\\/]/).pop() ?? null)
-      : null;
 
   return (
     <div className="flex h-full min-h-0 text-sm">
@@ -380,21 +389,18 @@ export default function ChatView() {
               )}
             </button>
             <span className="text-xs text-neutral-500">{t("chat.model")}</span>
-            {downloaded.length > 0 || customModelName ? (
+            {models.length > 0 ? (
               <select
-                className="max-w-[240px] rounded-md border border-neutral-300 bg-transparent px-2 py-1 text-sm dark:border-neutral-700"
-                value={activeModel?.id ?? (customModelName ? "__custom__" : "")}
-                onChange={(e) => {
-                  if (e.target.value !== "__custom__")
-                    void onModelChange(e.target.value);
-                }}
+                className="max-w-[260px] rounded-md border border-neutral-300 bg-transparent px-2 py-1 text-sm dark:border-neutral-700"
+                value={activeModel?.path ?? ""}
+                onChange={(e) => void onModelChange(e.target.value)}
                 disabled={streaming}
               >
-                {customModelName && (
-                  <option value="__custom__">{customModelName}</option>
+                {!activeModel && (
+                  <option value="">{t("chat.selectModel")}</option>
                 )}
-                {downloaded.map((m) => (
-                  <option key={m.id} value={m.id}>
+                {models.map((m) => (
+                  <option key={m.path} value={m.path}>
                     {m.name}
                   </option>
                 ))}
@@ -404,6 +410,39 @@ export default function ChatView() {
                 {t("chat.noModel")}
               </span>
             )}
+            <button
+              type="button"
+              onClick={() => void importModel()}
+              disabled={streaming}
+              className="flex items-center gap-1 rounded-md border border-neutral-300 px-2 py-1 text-xs text-neutral-600 hover:bg-neutral-100 disabled:opacity-40 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800"
+              title={t("chat.importModel")}
+            >
+              <Upload size={13} /> {t("chat.import")}
+            </button>
+            <span className="ml-1 text-xs text-neutral-500">
+              {t("chat.context")}
+            </span>
+            <select
+              className="rounded-md border border-neutral-300 bg-transparent px-2 py-1 text-sm dark:border-neutral-700"
+              value={ctxTokens}
+              onChange={(e) => {
+                const v = parseInt(e.target.value, 10);
+                setCtxTokens(v);
+                try {
+                  localStorage.setItem("dotflow.chat.ctx", String(v));
+                } catch {
+                  /* best-effort */
+                }
+              }}
+              disabled={streaming}
+              title={t("chat.contextHint")}
+            >
+              {[4096, 8192, 16384, 32768, 65536, 131072].map((n) => (
+                <option key={n} value={n}>
+                  {t("chat.tokensK", { count: n / 1024 })}
+                </option>
+              ))}
+            </select>
           </div>
         </div>
 
