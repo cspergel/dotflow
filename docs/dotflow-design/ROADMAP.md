@@ -155,6 +155,48 @@ clutter. Every action below is a prompt behind that surface, not a new button.
   dynamic-`ggml-cuda.dll` approach, which is blocked by the whisper/llama `ggml-base.dll` collision (research
   2026-07-08) and would need a separate CUDA helper process. Gate behind the same runtime GPU toggle.
 
+## Document ingestion — PDF → summarize / ask (2026-07-09)
+
+Drop a PDF into the AI Chat → extract its text locally → summarize it, pull key points, or ask questions
+about it (fully offline; the local model's large context holds a whole document). Useful for referrals,
+discharge summaries, lab PDFs, articles; composes with the EMR agent later (the agent can hand a chart PDF to
+this same pipeline). **Staged:**
+
+1. **Text-based PDFs (IN PROGRESS — prototyping now).** Pure-Rust text extraction (`pdf-extract` crate) →
+   feed the text to the existing local-model chat as context. No OCR. Immediate value for digital PDFs. A
+   scanned/image-only PDF yields no text layer → surface a clear "looks scanned, OCR coming" message.
+2. **Scanned PDFs via ONNX OCR (next).** The key insight: **DotFlow already ships ONNX Runtime + DirectML**
+   (Parakeet STT + the `ort` accelerator). So run OCR through the runtime we already bundle — **no Python**.
+   Best fit = **PaddleOCR PP-OCRv5 models exported to ONNX**, run via `ort` in Rust, GPU-accelerated on the
+   same onnxruntime → PaddleOCR-class accuracy on printed scans with clean packaging. `Tesseract` (native,
+   `leptess`) is the quick lower-accuracy fallback. Handwriting is where traditional OCR fails — that needs 3.
+3. **VLM upgrade (frontier / composes with P4 vision).** A vision-language model reads a scanned page AND
+   summarizes in one model call — no separate OCR stage. **Key update (2026-07-09): the user's Qwythos-9B
+   ALREADY has vision** — pair it with its `mmproj-*.gguf` (CLIP-style encoder + projector; its vision tower
+   is inherited from base Qwen3.5-9B, frozen during the text-only SFT, so vision ≈ base Qwen3.5-9B
+   multimodal). So the VLM path is **not blocked on a new model** — only on the integration. **Two integration
+   paths:**
+   - **(a) llama-server sidecar (pragmatic — routes around the mtmd blocker).** `llama-server -m <quant>
+     --mmproj <mmproj>` exposes an **OpenAI-compatible vision API** (`/v1/chat/completions` with base64
+     images). DotFlow **already speaks that shape** (the cloud/Ollama post-processor). Cost: an extra process
+     + a second model load in VRAM (~tight alongside chat on a 16 GB 5080 → swap models). Fastest route to
+     working vision/OCR.
+   - **(b) in-process mtmd binding.** Wire llama.cpp's multimodal (`mtmd`) path into `llama-cpp-2` (the P4
+     blocker). Cleaner (one process, shared model load) but real binding work.
+   - **Model choice: start with Qwythos's own vision** — one model for chat + OCR, no extra download/VRAM,
+     Qwen3.5-VL-class is good at *printed*-doc OCR. Add a **dedicated OCR VLM** (DeepSeek-OCR / Baidu
+     Unlimited-OCR — one-shot long-doc parse incl. layout/tables) **only if** real docs demand it (dense
+     tables, small print, handwriting). That slots cleanly into the **per-task-models** system as an `"ocr"`
+     role with its own optional model override. Digital PDFs need no vision model at all (option 1).
+
+**OCR tool survey (2026-07-09, for a Rust/Tauri offline app):** Tesseract = C++/native, Rust-bindable,
+bundles cleanly, weak on messy scans (Apache-2.0). EasyOCR = Python/PyTorch (heavy runtime → ruled out as a
+bundled dep). PaddleOCR = Python, **but models export to ONNX** → the native path above (Apache-2.0).
+Unlimited-OCR / DeepSeek-OCR = VLM, Python/PyTorch/NVIDIA, MIT — most capable (layout/tables), the option-3
+frontier. **Decision: prefer ONNX (reuse the shipped runtime) over any Python dependency; VLM via llama.cpp
+is the long-term end state.** Open input needed: how much of the user's scanned volume is handwritten (pushes
+option 3 sooner) vs printed (option 2 suffices).
+
 ## Long-term vision — voice-driven local agent for a web EMR (exploratory, 2026-07-09)
 
 The most ambitious direction: a **local tool-calling agent** that automates clinical busywork (chart-prep,
