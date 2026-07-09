@@ -118,9 +118,22 @@ clutter. Every action below is a prompt behind that surface, not a new button.
       Gemma 4 E2B ships vision (`mmproj-*.gguf`) and llama.cpp supports multimodal, but `llama-cpp-2` needs
       the multimodal (mtmd) path wired. Park until P1–P3 land.
 
+## Known bugs (fix soon)
+
+- **Review overlay wedge** (`feat/selection-review-overlay`): once the review card is open it doesn't dismiss
+  on click-away, so re-pressing the hotkey `raise`s the already-open card AND still runs `copy_selection` —
+  but the now-focused overlay window has no selection, so the copy returns empty and the card stays stuck
+  empty. Fix: when the overlay is already open, raising it must **not** attempt a fresh self-copy (skip the
+  copy, or copy from the previously-focused window), and/or give the card an obvious close affordance +
+  auto-dismiss option. Observed live 2026-07-08 during GPU testing.
+
 ## Later / backlog
 
 - Phone-as-microphone (LAN web page, QR pair, WebSocket audio → transcribe pipeline). Likely last.
+- **Whole-window AI action** (extends the highlight→hotkey→action primitive): a hotkey/mode that sources the
+  text from the **entire focused window** instead of a selection — grab via select-all+copy, or UI Automation
+  (`UIA`/accessibility) to read read-only/browser content — then run the same AI action (Summarize, etc.) and
+  show the result in the review card. Pairs naturally with the command surface (P1).
 - **GPU CUDA runtime — auto-download on GPU-enable** (the product-grade delivery for GPU accel). Ship the
   small CPU build; when a user turns on GPU acceleration, download NVIDIA's redistributable
   (`cudart`/`cublas`/`cublasLt`, ~515 MB) into `%APPDATA%/…/cuda/`, verify, and add that dir to the DLL
