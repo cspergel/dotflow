@@ -39,6 +39,10 @@ use specta::Type;
 /// The bundled, always-current default pack id. Also its filename stem for de-dup against user files.
 pub const MEDICAL_PACK_ID: &str = "medical";
 
+/// The user's editable custom pack id (filename stem `custom.txt`). Words added in-app land here and flow
+/// through the exact same acceptance-only safety filter as any other pack (jargon = terms MINUS curated).
+pub const CUSTOM_PACK_ID: &str = "custom";
+
 /// The bundled medical term list, compiled into the binary ([RS2-F3] — not seeded as an editable file).
 const MEDICAL_PACK_CONTENT: &str = include_str!("../../resources/dictionaries/medical.txt");
 
@@ -369,6 +373,96 @@ pub fn pack_infos(dir: &Path, enabled_ids: &[String]) -> Vec<DictionaryPackInfo>
         .collect()
 }
 
+// ---------------------------------------------------------------------------------------------------------
+// User custom words ("My Words" pack). A thin, safe editor over `dictionaries/custom.txt` so users can add
+// their own accepted vocabulary from inside the app. It is just another `.txt` pack (id `custom`), so it is
+// discovered, toggled, and safety-filtered by all the machinery above — no special-casing in build/analyze.
+// ---------------------------------------------------------------------------------------------------------
+
+/// The header written atop `custom.txt` — the `# label:` directive names the pack "My Words" in the UI.
+const CUSTOM_HEADER: &str = "# label: My Words\n# DotFlow custom dictionary — one accepted word per line. \
+Edit here or from Settings → Dictionaries. Blank lines and lines starting with # are ignored.\n";
+
+/// Path to the user's custom words file within the dictionaries dir.
+pub fn custom_words_path(dir: &Path) -> PathBuf {
+    dir.join("custom.txt")
+}
+
+/// Read the user's custom words (parsed, insertion-order-preserving). Empty if the file is absent, not a
+/// regular file, over the size cap, or unreadable — same guards as any pack ([RS2-F2]/[RS2-F7]).
+pub fn read_custom_words(dir: &Path) -> Vec<String> {
+    let path = custom_words_path(dir);
+    let Ok(meta) = std::fs::symlink_metadata(&path) else {
+        return Vec::new();
+    };
+    if !meta.file_type().is_file() || meta.len() > SIZE_CAP_BYTES {
+        return Vec::new();
+    }
+    let Ok(bytes) = std::fs::read(&path) else {
+        return Vec::new();
+    };
+    let mut s = String::from_utf8_lossy(&bytes).into_owned();
+    if s.starts_with('\u{feff}') {
+        s.remove(0);
+    }
+    parse_terms(&s)
+}
+
+/// Sanitize a single custom word: trim, drop control / quote / angle-bracket chars, then reject empty,
+/// whitespace-containing (Harper spell-checks per token, so multi-word entries can't match), or over-long
+/// input. Returns the cleaned word or a user-facing error message.
+pub fn sanitize_custom_word(raw: &str) -> Result<String, String> {
+    let cleaned: String = raw
+        .trim()
+        .chars()
+        .filter(|c| !c.is_control() && !matches!(c, '<' | '>' | '"' | '\''))
+        .collect();
+    let cleaned = cleaned.trim().to_string();
+    if cleaned.is_empty() {
+        return Err("Enter a word to add.".to_string());
+    }
+    if cleaned.chars().any(char::is_whitespace) {
+        return Err("A custom word can't contain spaces — add one word at a time.".to_string());
+    }
+    if cleaned.chars().count() > 60 {
+        return Err("That word is too long (max 60 characters).".to_string());
+    }
+    Ok(cleaned)
+}
+
+/// Write `custom.txt` (header + one word per line). Creates the dir if needed. Overwrites atomically enough
+/// for a hand-edited user file (whole-file rewrite from the parsed list).
+fn write_custom_words(dir: &Path, words: &[String]) -> Result<(), String> {
+    std::fs::create_dir_all(dir).map_err(|e| format!("create dictionaries dir: {e}"))?;
+    let mut out = String::from(CUSTOM_HEADER);
+    for w in words {
+        out.push_str(w);
+        out.push('\n');
+    }
+    std::fs::write(custom_words_path(dir), out).map_err(|e| format!("write custom.txt: {e}"))
+}
+
+/// Add a custom word (case-insensitive de-dup, insertion order). Returns the updated list.
+pub fn add_custom_word(dir: &Path, raw: &str) -> Result<Vec<String>, String> {
+    let word = sanitize_custom_word(raw)?;
+    let mut words = read_custom_words(dir);
+    let lower = word.to_lowercase();
+    if !words.iter().any(|w| w.to_lowercase() == lower) {
+        words.push(word);
+    }
+    write_custom_words(dir, &words)?;
+    Ok(words)
+}
+
+/// Remove a custom word (case-insensitive). Returns the updated list.
+pub fn remove_custom_word(dir: &Path, raw: &str) -> Result<Vec<String>, String> {
+    let lower = raw.trim().to_lowercase();
+    let mut words = read_custom_words(dir);
+    words.retain(|w| w.to_lowercase() != lower);
+    write_custom_words(dir, &words)?;
+    Ok(words)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -637,5 +731,83 @@ mod tests {
         assert!(!medical.enabled, "medical not in enabled set here");
         assert!(medical.term_count > 100, "bundled medical has a real list");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // Custom words — add is persisted, reads back, and lands in the merged dict + jargon set when the pack
+    // is enabled (the wiring that makes an added word actually get accepted). Also case-insensitive de-dup.
+    #[test]
+    fn custom_word_add_persists_and_feeds_the_dictionary() {
+        let dir = temp_dir("custom-add");
+        // A token guaranteed absent from curated so it can only appear via the custom pack.
+        let term = "zzqcustomtoken";
+        assert!(
+            !FstDictionary::curated().contains_word_str(term),
+            "premise: token must be absent from curated"
+        );
+
+        let words = add_custom_word(&dir, term).unwrap();
+        assert_eq!(words, vec![term.to_string()]);
+        assert_eq!(read_custom_words(&dir), vec![term.to_string()], "read back");
+
+        // Case-insensitive de-dup: adding the upper-case variant must not create a second entry.
+        let words2 = add_custom_word(&dir, "ZZQCUSTOMTOKEN").unwrap();
+        assert_eq!(words2.len(), 1, "case-insensitive de-dup");
+
+        // Enabling the `custom` pack must put the word in the dict AND the jargon (acceptance) set.
+        let built = build(&dir, &[CUSTOM_PACK_ID.to_string()]);
+        assert!(
+            built.dict.contains_word_str(term),
+            "custom pack on → word accepted by the dictionary"
+        );
+        assert!(
+            built.jargon.contains(term),
+            "custom word is in the acceptance-only jargon set"
+        );
+
+        // The label directive resolves to "My Words".
+        let infos = pack_infos(&dir, &[CUSTOM_PACK_ID.to_string()]);
+        let custom = infos.iter().find(|i| i.id == CUSTOM_PACK_ID).unwrap();
+        assert_eq!(custom.label, "My Words");
+        assert!(custom.enabled && custom.term_count == 1);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn custom_word_remove_takes_it_out_of_the_dictionary() {
+        let dir = temp_dir("custom-remove");
+        let term = "zzqremovable";
+        add_custom_word(&dir, term).unwrap();
+        assert!(build(&dir, &[CUSTOM_PACK_ID.to_string()])
+            .dict
+            .contains_word_str(term));
+
+        let left = remove_custom_word(&dir, "ZZQREMOVABLE").unwrap(); // case-insensitive removal
+        assert!(left.is_empty(), "word removed");
+        assert!(
+            !build(&dir, &[CUSTOM_PACK_ID.to_string()])
+                .dict
+                .contains_word_str(term),
+            "removed word no longer accepted"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn custom_word_sanitize_rejects_bad_input() {
+        assert!(sanitize_custom_word("   ").is_err(), "empty/blank rejected");
+        assert!(
+            sanitize_custom_word("two words").is_err(),
+            "spaces rejected (Harper is per-token)"
+        );
+        assert!(
+            sanitize_custom_word(&"x".repeat(61)).is_err(),
+            "over-long rejected"
+        );
+        // Quote/angle characters are stripped, not fatal, leaving a clean token.
+        assert_eq!(
+            sanitize_custom_word("  meto\"prolol  ").unwrap(),
+            "metoprolol"
+        );
     }
 }

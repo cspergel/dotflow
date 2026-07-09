@@ -6,6 +6,7 @@ import {
   FlaskConical,
   History,
   Info,
+  Library,
   Sparkles,
   Cpu,
   MessageSquareText,
@@ -23,6 +24,7 @@ import {
   ModelsSettings,
   PhrasesSettings,
   CleanupSettings,
+  DictionariesSettings,
 } from "./settings";
 import ChatView from "./chat/ChatView";
 
@@ -67,6 +69,13 @@ export const SECTIONS_CONFIG = {
     labelKey: "sidebar.cleanup",
     icon: WandSparkles,
     component: CleanupSettings,
+    enabled: () => true,
+    group: "dictate",
+  },
+  dictionaries: {
+    labelKey: "sidebar.dictionaries",
+    icon: Library,
+    component: DictionariesSettings,
     enabled: () => true,
     group: "dictate",
   },

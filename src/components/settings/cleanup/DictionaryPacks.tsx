@@ -122,13 +122,13 @@ export const DictionaryPacks: React.FC = () => {
               ? t("settings.dictionaries.reloading", "Reloading…")
               : t("settings.dictionaries.reload", "Reload")}
           </Button>
-          <span className="text-xs text-faint">
-            {t(
-              "settings.dictionaries.hint",
-              "Drop your own .txt term lists (one term per line) in the folder, then Reload.",
-            )}
-          </span>
         </div>
+        <p className="text-xs text-faint">
+          {t(
+            "settings.dictionaries.hint",
+            "The Medical pack is built into the app, so the folder starts empty — that's normal. Drop your own .txt term lists (one term per line) there, then Reload. Words you add under “My words” are saved there as custom.txt.",
+          )}
+        </p>
       </div>
     </SettingsGroup>
   );
