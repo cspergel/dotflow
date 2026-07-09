@@ -3,6 +3,7 @@ import {
   useRef,
   useEffect,
   useCallback,
+  useMemo,
   type MouseEvent,
 } from "react";
 import { listen } from "@tauri-apps/api/event";
@@ -23,6 +24,17 @@ import {
 import { open } from "@tauri-apps/plugin-dialog";
 import { commands, type LocalModelInfo } from "../../bindings";
 import { sanitize, parseThinking } from "./chatText";
+import { useChatDictation } from "./useChatDictation";
+import {
+  loadConversations,
+  saveConversations,
+  titleFrom,
+  newId,
+  estimateTokens,
+  OPEN_KEY,
+  type ChatMsg as Msg,
+  type Conversation,
+} from "./chatStore";
 
 // A light default persona so the local model is a genuinely helpful assistant rather than over-refusing.
 // It is prepended to the request only — never shown in the transcript or stored in history.
@@ -32,51 +44,6 @@ const SYSTEM_PROMPT =
   "including health, medical, legal, and financial subjects — to help the user understand, plan, and draft. " +
   "You are not a substitute for a licensed professional; briefly suggest consulting one for personal " +
   "decisions, but do NOT refuse to give general information or assistance.";
-
-type ChatRole = "user" | "assistant";
-interface Msg {
-  role: ChatRole;
-  content: string;
-  error?: boolean;
-}
-interface Conversation {
-  id: string;
-  title: string;
-  messages: Msg[];
-  updatedAt: number;
-}
-
-const STORAGE_KEY = "dotflow.chat.conversations.v1";
-
-function loadConversations(): Conversation[] {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    const parsed = raw ? JSON.parse(raw) : [];
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
-}
-function saveConversations(convs: Conversation[]) {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(convs.slice(0, 50)));
-  } catch {
-    /* storage full / disabled — history is best-effort */
-  }
-}
-function titleFrom(messages: Msg[]): string {
-  const first = messages.find((m) => m.role === "user")?.content ?? "";
-  const clean = first.trim().replace(/\s+/g, " ");
-  if (!clean) return "…";
-  return clean.length > 42 ? clean.slice(0, 42) + "…" : clean;
-}
-function newId(): string {
-  try {
-    return crypto.randomUUID();
-  } catch {
-    return `c-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
-  }
-}
 
 function appendToLastAssistant(msgs: Msg[], text: string): Msg[] {
   const last = msgs[msgs.length - 1];
@@ -108,7 +75,7 @@ export default function ChatView() {
   const [streaming, setStreaming] = useState(false);
   const [models, setModels] = useState<LocalModelInfo[]>([]);
   const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
-  const [recording, setRecording] = useState(false);
+  const { recording, toggleMic } = useChatDictation(setInput);
   const [ctxTokens, setCtxTokens] = useState<number>(() => {
     const v = parseInt(localStorage.getItem("dotflow.chat.ctx") ?? "8192", 10);
     return Number.isFinite(v) && v >= 512 ? v : 8192;
@@ -121,6 +88,30 @@ export default function ChatView() {
   useEffect(() => {
     saveConversations(conversations);
   }, [conversations]);
+
+  // Slide-out → expand handoff: if the compact quick chat asked to continue here, open that conversation once.
+  useEffect(() => {
+    try {
+      const openId = localStorage.getItem(OPEN_KEY);
+      if (!openId) return;
+      localStorage.removeItem(OPEN_KEY);
+      const conv = loadConversations().find((c) => c.id === openId);
+      if (conv) {
+        setActiveId(conv.id);
+        setMessages(conv.messages);
+      }
+    } catch {
+      /* best-effort handoff */
+    }
+  }, []);
+
+  // Live, approximate context-window usage (system prompt + transcript + what's being typed).
+  const usedTokens = useMemo(() => {
+    let sum = estimateTokens(SYSTEM_PROMPT) + estimateTokens(input);
+    for (const m of messages) sum += estimateTokens(m.content);
+    return sum;
+  }, [messages, input]);
+  const ctxPct = Math.min(100, Math.round((usedTokens / ctxTokens) * 100));
 
   const refreshModels = useCallback(async () => {
     try {
@@ -188,12 +179,12 @@ export default function ChatView() {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
   }, [messages]);
 
-  // Auto-grow the composer textarea.
+  // Auto-grow the composer textarea from one row up to a cap, so it starts small and matches the slide-out.
   useEffect(() => {
     const el = taRef.current;
     if (!el) return;
     el.style.height = "auto";
-    el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
+    el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
   }, [input]);
 
   const send = useCallback(async () => {
@@ -228,23 +219,6 @@ export default function ChatView() {
   const stop = useCallback(async () => {
     await commands.chatCancel(turnIdRef.current);
   }, []);
-
-  // Voice input: toggle mic recording; on stop, append the returned transcript to the composer. Reuses the
-  // dictation pipeline but RETURNS text (no paste), so it lands reliably in the box.
-  const toggleMic = useCallback(async () => {
-    if (recording) {
-      setRecording(false);
-      const res = await commands.chatDictateStop();
-      if (res.status === "ok" && res.data.trim()) {
-        const t = res.data.trim();
-        setInput((prev) => (prev.trim() ? prev.trimEnd() + " " + t : t));
-      }
-    } else {
-      const res = await commands.chatDictateStart();
-      if (res.status === "ok") setRecording(true);
-      // else: another dictation is active or no mic — ignore.
-    }
-  }, [recording]);
 
   const newChat = useCallback(() => {
     if (streaming) return;
@@ -373,7 +347,7 @@ export default function ChatView() {
       <div className="flex min-w-0 flex-1 flex-col">
         {/* Header */}
         <div className="flex items-center justify-between gap-2 border-b border-neutral-200 px-4 py-2 dark:border-neutral-800">
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
             <button
               type="button"
               onClick={toggleRail}
@@ -441,6 +415,25 @@ export default function ChatView() {
                 </option>
               ))}
             </select>
+            <span
+              className={`ml-1 whitespace-nowrap text-xs tabular-nums ${
+                ctxPct >= 90
+                  ? "text-red-500"
+                  : ctxPct >= 70
+                    ? "text-amber-500"
+                    : "text-neutral-500"
+              }`}
+              title={t(
+                "chat.contextUsageHint",
+                "Approximate share of the context window used by this conversation",
+              )}
+            >
+              {t("chat.contextUsage", "≈{{used}} / {{max}}k ({{pct}}%)", {
+                used: usedTokens.toLocaleString(),
+                max: ctxTokens / 1024,
+                pct: ctxPct,
+              })}
+            </span>
           </div>
         </div>
 
@@ -537,7 +530,7 @@ export default function ChatView() {
               rows={1}
               value={input}
               placeholder={t("chat.placeholder")}
-              className="max-h-[200px] flex-1 resize-none bg-transparent py-1.5 text-[15px] leading-relaxed outline-none placeholder:text-neutral-400"
+              className="max-h-[160px] flex-1 resize-none overflow-y-auto bg-transparent py-1.5 text-[15px] leading-relaxed outline-none placeholder:text-neutral-400"
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === "Enter" && !e.shiftKey) {
@@ -548,7 +541,7 @@ export default function ChatView() {
             />
             <button
               type="button"
-              onClick={() => void toggleMic()}
+              onClick={() => void toggleMic(input)}
               className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl transition-colors ${
                 recording
                   ? "animate-pulse bg-red-500 text-white"

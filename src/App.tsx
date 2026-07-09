@@ -14,6 +14,7 @@ import Footer from "./components/footer";
 import Onboarding, { AccessibilityOnboarding } from "./components/onboarding";
 import { Sidebar, SidebarSection, SECTIONS_CONFIG } from "./components/Sidebar";
 import QuickChat from "./components/chat/QuickChat";
+import { OPEN_KEY, QUICK_CONV_KEY } from "./components/chat/chatStore";
 import { TitleBar } from "./components/TitleBar";
 import { DragonBar } from "./components/DragonBar";
 import { MiniBar } from "./components/MiniBar";
@@ -50,10 +51,14 @@ function App() {
   const [isDictating, setIsDictating] = useState(false);
   // Quick-chat slide-out from the compact bar (grows the window when open).
   const [quickChatOpen, setQuickChatOpen] = useState(false);
+  // True once the quick chat has been used since the last time we were in the full view — so expanding
+  // continues in the AI chat even if the slide-out was closed again before expanding. Reset on view change.
+  const quickChatUsedRef = useRef(false);
 
   const applyViewMode = async (mode: "full" | "bar" | "mini") => {
     setViewMode(mode);
     setQuickChatOpen(false);
+    quickChatUsedRef.current = false;
     try {
       const win = getCurrentWindow();
       if (mode === "mini") {
@@ -70,18 +75,34 @@ function App() {
       } else {
         await win.setAlwaysOnTop(false);
         await win.setResizable(true);
-        await win.setMinSize(new LogicalSize(560, 480));
-        await win.setSize(new LogicalSize(680, 570));
+        await win.setMinSize(new LogicalSize(640, 520));
+        await win.setSize(new LogicalSize(860, 640));
       }
     } catch (e) {
       console.warn("Failed to resize window for view mode:", e);
     }
   };
 
+  // Expand from the compact bar to the full app. If the quick-chat slide-out is mid-conversation, continue
+  // it in the full AI Chat view (hand the conversation id off) instead of returning to the prior section.
+  const expandFromBar = () => {
+    if (quickChatOpen || quickChatUsedRef.current) {
+      try {
+        const qid = localStorage.getItem(QUICK_CONV_KEY);
+        if (qid) localStorage.setItem(OPEN_KEY, qid);
+      } catch {
+        /* best-effort handoff */
+      }
+      setCurrentSection("chat");
+    }
+    void applyViewMode("full");
+  };
+
   // Toggle the quick-chat panel in the compact bar, growing/shrinking the window to fit it.
   const toggleQuickChat = async () => {
     const next = !quickChatOpen;
     setQuickChatOpen(next);
+    if (next) quickChatUsedRef.current = true;
     try {
       const win = getCurrentWindow();
       await win.setSize(new LogicalSize(360, next ? 440 : 44));
@@ -345,7 +366,7 @@ function App() {
         <Toaster theme="system" />
         <div className="h-11 shrink-0">
           <DragonBar
-            onExpand={() => applyViewMode("full")}
+            onExpand={expandFromBar}
             onShrink={() => applyViewMode("mini")}
             onToggleChat={() => void toggleQuickChat()}
             chatOpen={quickChatOpen}

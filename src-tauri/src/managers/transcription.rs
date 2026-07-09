@@ -257,6 +257,10 @@ pub struct TranscriptionManager {
     /// (`kkkkke`); spacing them ≥`FIELD_INJECT_THROTTLE` apart (words accumulate in the meantime and
     /// flush in one larger write) eliminates the race. `None` until the first write of a dictation.
     last_field_inject: Arc<Mutex<Option<std::time::Instant>>>,
+    /// DotFlow: true while a *chat* dictation is streaming. The live preview goes to the chat box (via the
+    /// `stream-text` event) only — this flag suppresses the focused-field injection in [`emit_stream_text`]
+    /// so chat dictation never types into the webview or the previously-focused app.
+    chat_stream_mode: Arc<AtomicBool>,
 }
 
 impl TranscriptionManager {
@@ -279,6 +283,7 @@ impl TranscriptionManager {
             active_engine_lease: Arc::new(AtomicU64::new(0)),
             field_streamer: Arc::new(Mutex::new(crate::dotflow::FieldStreamer::new())),
             last_field_inject: Arc::new(Mutex::new(None)),
+            chat_stream_mode: Arc::new(AtomicBool::new(false)),
         };
 
         // Start the idle watcher
@@ -767,6 +772,12 @@ impl TranscriptionManager {
     /// model can't stream, the worker idles until finalize/cancel and reports
     /// `None` so the caller falls back to batch transcription. Frames sent
     /// before the stream begins queue on the channel and are not lost.
+    /// DotFlow: mark (or clear) chat-dictation streaming. While set, [`emit_stream_text`] still emits the
+    /// `stream-text` event (the chat box reads it) but skips focused-field injection.
+    pub fn set_chat_stream_mode(&self, on: bool) {
+        self.chat_stream_mode.store(on, Ordering::Relaxed);
+    }
+
     pub fn start_stream(&self) {
         if self.router.is_open() || self.active_stream_worker.load(Ordering::Acquire) != 0 {
             warn!("start_stream called while a stream worker is already active");
@@ -1108,6 +1119,10 @@ impl TranscriptionManager {
         // EXPANDED (dot-triggers/voice-aliases land as one block via the command-buffer), holding the trailing
         // partial word / in-progress trigger, so we inject in far fewer, whole-word bursts and avoid the
         // keystroke-race. The tentative guess stays in the overlay above; the held tail is flushed at stop.
+        // Chat dictation streams to the chat box only (event above) — never inject into a field.
+        if self.chat_stream_mode.load(Ordering::Relaxed) {
+            return;
+        }
         let settings = crate::settings::get_settings(&self.app_handle);
         if settings.experimental_field_streaming {
             // THROTTLE: if we injected within the (user-tunable) throttle window, skip this tick WITHOUT
