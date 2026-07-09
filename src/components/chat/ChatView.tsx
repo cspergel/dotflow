@@ -15,8 +15,19 @@ import {
   Trash2,
   PanelLeftClose,
   PanelLeftOpen,
+  Copy,
+  Check,
 } from "lucide-react";
 import { commands, type LlmModelInfo } from "../../bindings";
+
+// A light default persona so the local model is a genuinely helpful assistant rather than over-refusing.
+// It is prepended to the request only — never shown in the transcript or stored in history.
+const SYSTEM_PROMPT =
+  "You are DotFlow, a helpful, knowledgeable assistant running locally and privately on the user's own " +
+  "computer. Give clear, direct, useful help. Provide general educational information on any topic — " +
+  "including health, medical, legal, and financial subjects — to help the user understand, plan, and draft. " +
+  "You are not a substitute for a licensed professional; briefly suggest consulting one for personal " +
+  "decisions, but do NOT refuse to give general information or assistance.";
 
 type ChatRole = "user" | "assistant";
 interface Msg {
@@ -92,6 +103,8 @@ export default function ChatView() {
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
   const [models, setModels] = useState<LlmModelInfo[]>([]);
+  const [activeModelPath, setActiveModelPath] = useState<string>("");
+  const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
   const turnIdRef = useRef(0);
   const scrollRef = useRef<HTMLDivElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
@@ -107,6 +120,27 @@ export default function ChatView() {
     } catch {
       /* keep prior models */
     }
+    try {
+      const s = await commands.getAppSettings();
+      if (s.status === "ok") setActiveModelPath(s.data.local_llm_model_path ?? "");
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  const copyMessage = useCallback((idx: number, text: string) => {
+    void navigator.clipboard
+      .writeText(text)
+      .then(() => {
+        setCopiedIdx(idx);
+        window.setTimeout(
+          () => setCopiedIdx((c) => (c === idx ? null : c)),
+          1200,
+        );
+      })
+      .catch(() => {
+        /* clipboard denied */
+      });
   }, []);
   useEffect(() => {
     void refreshModels();
@@ -178,9 +212,10 @@ export default function ChatView() {
     setMessages(next);
     setInput("");
     setStreaming(true);
-    const payload = next
-      .slice(0, -1)
-      .map((m) => ({ role: m.role, content: m.content }));
+    const payload = [
+      { role: "system", content: SYSTEM_PROMPT },
+      ...next.slice(0, -1).map((m) => ({ role: m.role, content: m.content })),
+    ];
     const res = await commands.chatStream(turn, payload);
     if (res.status === "error" && turn === turnIdRef.current) {
       setMessages((m) => replaceLastAssistant(m, res.error, true));
@@ -242,6 +277,12 @@ export default function ChatView() {
 
   const downloaded = models.filter((m) => m.downloaded);
   const activeModel = models.find((m) => m.active);
+  // A model set outside the catalog (e.g. an imported/hand-set GGUF like Qwythos) — show its filename so the
+  // dropdown reflects what's actually loaded instead of misleadingly showing a catalog default.
+  const customModelName =
+    !activeModel && activeModelPath
+      ? (activeModelPath.split(/[\\/]/).pop() ?? null)
+      : null;
 
   return (
     <div className="flex h-full min-h-0 text-sm">
@@ -317,13 +358,19 @@ export default function ChatView() {
               )}
             </button>
             <span className="text-xs text-neutral-500">{t("chat.model")}</span>
-            {downloaded.length > 0 ? (
+            {downloaded.length > 0 || customModelName ? (
               <select
-                className="rounded-md border border-neutral-300 bg-transparent px-2 py-1 text-sm dark:border-neutral-700"
-                value={activeModel?.id ?? ""}
-                onChange={(e) => void onModelChange(e.target.value)}
+                className="max-w-[240px] rounded-md border border-neutral-300 bg-transparent px-2 py-1 text-sm dark:border-neutral-700"
+                value={activeModel?.id ?? (customModelName ? "__custom__" : "")}
+                onChange={(e) => {
+                  if (e.target.value !== "__custom__")
+                    void onModelChange(e.target.value);
+                }}
                 disabled={streaming}
               >
+                {customModelName && (
+                  <option value="__custom__">{customModelName}</option>
+                )}
                 {downloaded.map((m) => (
                   <option key={m.id} value={m.id}>
                     {m.name}
@@ -347,11 +394,27 @@ export default function ChatView() {
           ) : (
             <div className="mx-auto flex max-w-3xl flex-col gap-6 px-4 py-6">
               {messages.map((m, i) => (
-                <div key={i} className="flex flex-col gap-1">
-                  <div className="text-[11px] font-semibold uppercase tracking-wide text-neutral-400">
-                    {m.role === "user"
-                      ? t("chat.roleYou")
-                      : t("chat.roleAssistant")}
+                <div key={i} className="group flex flex-col gap-1">
+                  <div className="flex items-center gap-2">
+                    <span className="text-[11px] font-semibold uppercase tracking-wide text-neutral-400">
+                      {m.role === "user"
+                        ? t("chat.roleYou")
+                        : t("chat.roleAssistant")}
+                    </span>
+                    {m.content && !m.error && (
+                      <button
+                        type="button"
+                        onClick={() => copyMessage(i, m.content)}
+                        className="text-neutral-400 opacity-0 transition hover:text-neutral-600 group-hover:opacity-100 dark:hover:text-neutral-200"
+                        title={t("chat.copy")}
+                      >
+                        {copiedIdx === i ? (
+                          <Check size={13} />
+                        ) : (
+                          <Copy size={13} />
+                        )}
+                      </button>
+                    )}
                   </div>
                   <div
                     className={`whitespace-pre-wrap leading-relaxed ${

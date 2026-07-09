@@ -35,6 +35,7 @@
     "delete": "Delete",
     "roleYou": "You",
     "roleAssistant": "DotFlow",
+    "copy": "Copy",
     "empty": "Ask your offline model anything.",
     "placeholder": "Ask anything…  (Enter to send, Shift+Enter for newline)",
     "send": "Send",
