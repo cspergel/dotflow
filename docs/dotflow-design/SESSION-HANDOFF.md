@@ -27,8 +27,8 @@ and a premium Linear/Raycast-style UI. Primary user is a **clinician**; the beac
 
 - Self-contained GPU app lives at **`C:\Users\drcra\DotFlow-GPU\`** + Desktop shortcut **"DotFlow (GPU)"**
   (runs `DotFlow-GPU.vbs`, which prepends CUDA Toolkit v13.3 `bin\x64` to PATH so it finds cublas/cudart).
-- Each build is manually **swapped** into that folder (copy `dotflow.exe` + `*.dll`). Latest swap: **2026-07-09
-  ~23:31** (q8-KV / 32k build). Card = RTX **5080** (16 GB). Single-instance: close any running copy first.
+- Each build is manually **swapped** into that folder (copy `dotflow.exe` + `*.dll`). Latest swap: **2026-07-10
+  ~14:47** (stable fp16-KV / 16k build). Card = RTX **5080** (16 GB). Single-instance: close any running copy first.
 - **Runtime files that MUST sit next to the exe** (gitignored, NOT vendored — fetch at setup):
   `pdfium.dll` (7 MB, bblanchon/pdfium-binaries), `text-detection.rten` (2.4 MB) + `text-recognition.rten`
   (9.3 MB) (ocrs models, `ocrs-models.s3-accelerate.amazonaws.com`), plus the CUDA DLLs from the build. NOTE:
@@ -75,17 +75,19 @@ handoff, **streaming dictation into the box**, auto-grow composers, chat cutoff 
 **Documents:** attach a **text PDF** → summarize/ask (auto-expands context). **Scanned-PDF OCR** (pdfium
 rasterize + ocrs, CPU) — **works great: 53k chars in ~20s** on the user's 29-page chart. Page-tolerant.
 
-**Long context:** **q8 KV cache + flash attention** → **32k context fits in 16 GB** (was OOM-crashing at 32k
-with fp16 KV). Caps at 32k everywhere.
+**Long context (⚠️ REVERTED 2026-07-10):** a q8-KV + forced-flash-attn build to fit 32k **crashed on the 5080**
+(uncatchable CUDA abort at context creation, asking about an attached doc). **Reverted to stable fp16 KV + no
+forced FA + 16k cap.** In-process LLM = any CUDA fault hard-crashes the app. Larger contexts → the sidecar.
+`read_pdf_text` also made crash-safe (256MB-stack thread + catch_unwind; pdf-extract can stack-overflow).
 
 **Model:** Qwythos-9B (Claude-Mythos, qwen35 arch, 1M ctx) = chat model; Gemma for transforms. **Qwythos HAS
 vision** via its `mmproj-*.gguf` (= base Qwen3.5-9B multimodal) — not yet wired.
 
 ## PENDING USER TESTS (verify first thing)
 
-1. **OCR + 32k on a real chart:** set context to 32k, OCR `Clinicals_and_3008.pdf`, summarize + ask pointed
-   follow-ups. Confirm **no OOM crash** and good recall. **Runtime unknown:** flash-attn must support Qwen3.5
-   head dims at 32k — if the model *fails to load*, fall back (e.g. `V=q5_1`, or lower the cap).
+1. **OCR + chat crash-free (16k):** OCR `Clinicals_and_3008.pdf`, summarize + ask follow-ups. Confirm **no
+   crash** now (the q8/32k build crashed; this is the reverted fp16/16k). Recall should be good within 16k.
+   (32k is deferred to the sidecar — do NOT re-enable in-process q8/32k.)
 2. **OCR quality** on real clinical faxes (the big unknown). Decides if CPU-OCR is "done" or we escalate to a
    GPU/ONNX or VLM OCR path.
 3. Sanity-check the rest of the session's features in real use.
@@ -94,7 +96,9 @@ vision** via its `mmproj-*.gguf` (= base Qwen3.5-9B multimodal) — not yet wire
 
 - **Vision via `llama-server` sidecar** — the big foundational investment. Qwythos+mmproj behind an
   OpenAI-compatible vision API (DotFlow already speaks that shape) routes around the `llama-cpp-2` mtmd blocker.
-  **One investment unlocks: VLM-OCR (hard/handwritten docs), image/screenshot chat, AND screen perception.**
+  **NOW THE #1 PRIORITY — it's not just vision:** a separate process **crash-isolates** the LLM (a CUDA
+  OOM/abort fails the request instead of killing the app — the in-process design can't), unlocks **32k+ context
+  safely**, AND gives vision. **One investment, three wins.** This is the fix for the crash class we hit.
 - **Novel screen-use ideas** (user excited): **ambient clinical safety-net** (real-time flag wrong dose /
   allergy / wrong-chart-open — only a *local* model can watch a PHI screen continuously), **Citrix/VDI-proof
   universal OCR grab** (grab uncopyable text anywhere), ethically-local Rewind timeline, screen-context macros,
