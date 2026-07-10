@@ -28,7 +28,8 @@ and a premium Linear/Raycast-style UI. Primary user is a **clinician**; the beac
 - Self-contained GPU app lives at **`C:\Users\drcra\DotFlow-GPU\`** + Desktop shortcut **"DotFlow (GPU)"**
   (runs `DotFlow-GPU.vbs`, which prepends CUDA Toolkit v13.3 `bin\x64` to PATH so it finds cublas/cudart).
 - Each build is manually **swapped** into that folder (copy `dotflow.exe` + `*.dll`). Latest swap: **2026-07-10
-  ~14:47** (stable fp16-KV / 16k build). Card = RTX **5080** (16 GB). Single-instance: close any running copy first.
+  ~19:24** (chunked map-reduce summarize `6833ec6` + updater fix `b4ddebd`; stable fp16-KV / 16k). Card = RTX
+  **5080** (16 GB). Single-instance: close any running copy first.
 - **Runtime files that MUST sit next to the exe** (gitignored, NOT vendored — fetch at setup):
   `pdfium.dll` (7 MB, bblanchon/pdfium-binaries), `text-detection.rten` (2.4 MB) + `text-recognition.rten`
   (9.3 MB) (ocrs models, `ocrs-models.s3-accelerate.amazonaws.com`), plus the CUDA DLLs from the build. NOTE:
