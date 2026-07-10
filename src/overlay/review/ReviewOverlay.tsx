@@ -23,13 +23,10 @@ export type ReviewAction = "proofread" | "rewrite" | "formal" | "summarize";
 type ActiveAction = ReviewAction | "custom";
 
 const CARD_WIDTH = 420;
+// Keep in sync with the card root's `max-h-[480px]`: the window is sized to the card content, capped here,
+// and the flex body scrolls internally beyond it so the header/chips/command and footer stay pinned/visible.
 const CARD_MAX_HEIGHT = 480;
 const CARD_MIN_HEIGHT = 96;
-// Height of the non-scrolling chrome (title bar + chip row + footer). The scrolling body is capped at
-// CARD_MAX_HEIGHT minus this, so the body cap and the window's max height share one source of truth and
-// can't drift apart.
-const CARD_CHROME_HEIGHT = 190;
-const CARD_BODY_MAX_HEIGHT = CARD_MAX_HEIGHT - CARD_CHROME_HEIGHT;
 
 /**
  * Pure chip-gating predicate: Proofread is offline and always available; the AI actions
@@ -355,13 +352,13 @@ const ReviewOverlay: React.FC = () => {
   return (
     <div
       ref={cardRef}
-      className="font-sans flex w-screen flex-col overflow-hidden rounded-xl border border-hairline-strong bg-panel text-text"
+      className="font-sans flex max-h-[480px] w-screen flex-col overflow-hidden rounded-xl border border-hairline-strong bg-panel text-text"
     >
       {/* Drag handle — grab here to move the card. Interactive children below aren't drag regions, so they
           still click normally. */}
       <div
         data-tauri-drag-region
-        className="flex cursor-move items-center justify-between border-b border-hairline px-3 py-1.5 select-none"
+        className="flex shrink-0 cursor-move items-center justify-between border-b border-hairline px-3 py-1.5 select-none"
       >
         <span
           data-tauri-drag-region
@@ -372,13 +369,13 @@ const ReviewOverlay: React.FC = () => {
       </div>
 
       {/* Chip row — pinned common actions */}
-      <div className="flex flex-wrap items-center gap-1.5 border-b border-hairline px-3 pt-2.5 pb-2.5">
+      <div className="flex shrink-0 flex-wrap items-center gap-1.5 border-b border-hairline px-3 pt-2.5 pb-2.5">
         {renderChip("proofread")}
         {AI_ACTIONS.map(renderChip)}
       </div>
 
       {/* Command surface — type or dictate a free-form instruction; runs it against the selection. */}
-      <div className="border-b border-hairline px-3 py-2">
+      <div className="shrink-0 border-b border-hairline px-3 py-2">
         <div
           className={`flex items-end gap-1 rounded-lg border px-2 py-1 ${
             aiAvailable
@@ -454,12 +451,9 @@ const ReviewOverlay: React.FC = () => {
         </div>
       </div>
 
-      {/* Body — grows with content up to CARD_MAX_HEIGHT, then scrolls internally. The cap is derived from
-          CARD_MAX_HEIGHT (minus the chrome height) so it stays in lockstep with the window sizing. */}
-      <div
-        className="overflow-y-auto px-3 py-3 text-sm"
-        style={{ maxHeight: CARD_BODY_MAX_HEIGHT }}
-      >
+      {/* Body — flex-fills the space between the fixed chrome and the pinned footer, scrolling internally
+          when the result is tall. `min-h-0` lets it shrink below its content so the footer stays visible. */}
+      <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3 text-sm">
         {activeAction === "proofread" ? (
           <ReviewPanel text={text} onResult={setReviewResult} />
         ) : aiLoading ? (
@@ -517,13 +511,13 @@ const ReviewOverlay: React.FC = () => {
 
       {/* Inline Apply/Copy failure — surfaced here rather than silently closing/doing nothing. */}
       {actionError && (
-        <div className="border-t border-hairline px-3 py-2 text-xs text-red-500">
+        <div className="shrink-0 border-t border-hairline px-3 py-2 text-xs text-red-500">
           {actionError}
         </div>
       )}
 
-      {/* Footer */}
-      <div className="flex items-center justify-end gap-2 border-t border-hairline px-3 py-2.5">
+      {/* Footer — always pinned + visible (shrink-0) so Close/Copy/Apply never get pushed off. */}
+      <div className="flex shrink-0 items-center justify-end gap-2 border-t border-hairline px-3 py-2.5">
         <button
           type="button"
           onClick={() => void handleClose()}
