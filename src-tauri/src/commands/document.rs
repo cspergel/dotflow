@@ -9,6 +9,30 @@
 /// context. ~600k chars ≈ 150k tokens — well within a large-context model, truncated with a note beyond that.
 const MAX_CHARS: usize = 600_000;
 
+/// OCR a (scanned) PDF: rasterize each page via pdfium, then read text off each with the ocrs engine, and
+/// return the concatenated text. CPU-bound (render + OCR) so it runs off the async runtime. Returns a clear
+/// error if the OCR models aren't installed. The trimmed result is empty-checked by the caller.
+#[tauri::command]
+#[specta::specta]
+pub async fn ocr_pdf(path: String) -> Result<String, String> {
+    let p = std::path::PathBuf::from(path.trim());
+    if !p.exists() {
+        return Err(format!("File not found: {}", p.display()));
+    }
+    let text = tauri::async_runtime::spawn_blocking(move || -> Result<String, String> {
+        let images = crate::dotflow::pdf_render::render_pages(&p, 1600)?;
+        crate::dotflow::ocr::ocr_pages(&images)
+    })
+    .await
+    .map_err(|e| format!("OCR task failed: {e}"))??;
+
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return Err("OCR found no readable text in this document.".to_string());
+    }
+    Ok(trimmed.to_string())
+}
+
 /// Extract the text of a PDF at `path`. Runs the (CPU-bound) parse on a blocking thread. Returns the trimmed
 /// text, or a user-facing error: file-missing, not-a-PDF, parse failure, or an empty result (scanned PDF).
 #[tauri::command]

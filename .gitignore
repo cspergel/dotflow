@@ -52,3 +52,7 @@ mutants.out*
 
 # Screenshots dropped in the repo root
 Screenshot*.png
+
+# DotFlow: large runtime binaries fetched at setup (pdfium.dll + ocrs *.rten models) — not vendored
+src-tauri/resources/pdfium/
+*.rten

@@ -102,6 +102,12 @@ export default function ChatView() {
     text: string;
   } | null>(null);
   const [attachError, setAttachError] = useState<string | null>(null);
+  // A scanned PDF (no text layer) offered for OCR: {path, name}. Set when read_pdf_text reports "scanned".
+  const [scannedPdf, setScannedPdf] = useState<{
+    path: string;
+    name: string;
+  } | null>(null);
+  const [ocrBusy, setOcrBusy] = useState(false);
   const turnIdRef = useRef(0);
   const scrollRef = useRef<HTMLDivElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
@@ -148,17 +154,38 @@ export default function ChatView() {
       });
       if (typeof picked !== "string") return;
       setAttachError(null);
+      setScannedPdf(null);
+      const name = picked.split(/[\\/]/).pop() || "document.pdf";
       const res = await commands.readPdfText(picked);
       if (res.status === "ok") {
-        const name = picked.split(/[\\/]/).pop() || "document.pdf";
         setAttachedDoc({ name, text: res.data });
       } else {
         setAttachError(res.error);
+        // Scanned/image PDF → offer to OCR it instead.
+        if (/scanned/i.test(res.error)) setScannedPdf({ path: picked, name });
       }
     } catch {
       /* dialog cancelled */
     }
   }, []);
+
+  // Run OCR on a scanned PDF (rasterize + read text), then attach the recognized text as the document.
+  const runOcr = useCallback(async () => {
+    if (!scannedPdf || ocrBusy) return;
+    setOcrBusy(true);
+    try {
+      const res = await commands.ocrPdf(scannedPdf.path);
+      if (res.status === "ok") {
+        setAttachedDoc({ name: scannedPdf.name, text: res.data });
+        setScannedPdf(null);
+        setAttachError(null);
+      } else {
+        setAttachError(res.error);
+      }
+    } finally {
+      setOcrBusy(false);
+    }
+  }, [scannedPdf, ocrBusy]);
 
   const refreshModels = useCallback(async () => {
     try {
@@ -627,7 +654,7 @@ export default function ChatView() {
 
         {/* Composer */}
         <div className="border-t border-neutral-200 px-4 py-2 dark:border-neutral-800">
-          {(attachedDoc || attachError) && (
+          {(attachedDoc || attachError || scannedPdf) && (
             <div className="mx-auto mb-1.5 max-w-3xl">
               {attachedDoc && (
                 <div className="inline-flex items-center gap-1.5 rounded-lg border border-neutral-300 bg-neutral-100 px-2 py-1 text-xs dark:border-neutral-700 dark:bg-neutral-800">
@@ -655,6 +682,19 @@ export default function ChatView() {
               )}
               {attachError && (
                 <div className="mt-1 text-xs text-red-500">{attachError}</div>
+              )}
+              {scannedPdf && (
+                <button
+                  type="button"
+                  onClick={() => void runOcr()}
+                  disabled={ocrBusy}
+                  className="mt-1.5 inline-flex items-center gap-1.5 rounded-lg border border-emerald-400 bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700 hover:bg-emerald-100 disabled:opacity-60 dark:bg-emerald-900/20 dark:text-emerald-300"
+                >
+                  <FileText size={12} />
+                  {ocrBusy
+                    ? t("chat.ocrRunning", "Reading pages… (this can take a bit)")
+                    : t("chat.ocrRun", "Read it with OCR")}
+                </button>
               )}
             </div>
           )}
