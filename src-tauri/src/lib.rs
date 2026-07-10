@@ -698,6 +698,7 @@ pub fn run(cli_args: CliArgs) {
             commands::ai::ai_transform_custom,
             commands::document::read_pdf_text,
             commands::document::ocr_pdf,
+            commands::document::summarize_document,
             commands::ai::ai_transform_available,
             commands::ai::get_transform_reasoning,
             commands::ai::set_transform_reasoning,

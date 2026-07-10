@@ -111,6 +111,9 @@ export default function ChatView() {
   } | null>(null);
   const [ocrBusy, setOcrBusy] = useState(false);
   const turnIdRef = useRef(0);
+  // True while a big-document map/reduce summary is running, so the `doc-summarize-progress` listener knows to
+  // paint progress into the last assistant bubble (and normal chat streams don't).
+  const summarizeActiveRef = useRef(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
 
@@ -247,6 +250,17 @@ export default function ChatView() {
       setMessages((m) => replaceLastAssistant(m, e.payload.message, true));
       setStreaming(false);
     }).then((u) => unlisten.push(u));
+    // Big-document summarize progress: paint the current step into the assistant bubble as it maps/reduces.
+    void listen<{ done: number; total: number; stage: string }>(
+      "doc-summarize-progress",
+      (e) => {
+        if (!summarizeActiveRef.current) return;
+        const { done, total, stage } = e.payload;
+        setMessages((m) =>
+          replaceLastAssistant(m, `_${stage} — step ${done} of ${total}…_`),
+        );
+      },
+    ).then((u) => unlisten.push(u));
     return () => unlisten.forEach((u) => u());
   }, []);
 
@@ -287,6 +301,27 @@ export default function ChatView() {
     setMessages(next);
     setInput("");
     setStreaming(true);
+
+    // A document too large to fit the context window can't be chatted with directly — route it through the
+    // offline map/reduce summarizer, which reads it in parts and never exceeds the stable 16k window. The
+    // user's message becomes the instruction (what to produce, e.g. a comprehensive HPI).
+    const SAFE_CTX_CAP = 16384;
+    if (attachedDoc && usedTokens + 2048 > SAFE_CTX_CAP) {
+      summarizeActiveRef.current = true;
+      setMessages((m) => replaceLastAssistant(m, "_Reading the document…_"));
+      const res = await commands.summarizeDocument(attachedDoc.text, text);
+      summarizeActiveRef.current = false;
+      if (turn === turnIdRef.current) {
+        if (res.status === "ok") {
+          setMessages((m) => replaceLastAssistant(m, res.data));
+        } else {
+          setMessages((m) => replaceLastAssistant(m, res.error, true));
+        }
+        setStreaming(false);
+      }
+      return;
+    }
+
     // Inject the attached document as a context turn (kept out of the visible transcript) so it's available
     // every turn while attached — enabling follow-up questions about it.
     const docContext = attachedDoc
@@ -304,9 +339,8 @@ export default function ChatView() {
       ...next.slice(0, -1).map((m) => ({ role: m.role, content: m.content })),
     ];
     // When a document is attached it can dwarf the selected context window. Grow the context to fit the doc +
-    // answer, capped at a VRAM-safe 16k (stable fp16 KV). Beyond that the backend returns a graceful "doesn't
-    // fit" error, never a crash. Larger docs need the sidecar (crash-isolated) or chunked summarization.
-    const SAFE_CTX_CAP = 16384;
+    // answer, capped at a VRAM-safe 16k (stable fp16 KV). Beyond that we routed to summarize_document above;
+    // here the doc fits, so just grow the window to hold it.
     let effectiveCtx = ctxTokens;
     if (attachedDoc) {
       const needed = usedTokens + 2048; // prompt (incl. doc) + a little answer headroom
@@ -407,53 +441,53 @@ export default function ChatView() {
       {/* Conversations rail (collapsible) */}
       {railOpen && (
         <aside className="flex w-56 shrink-0 flex-col border-r border-neutral-200 dark:border-neutral-800">
-        <div className="p-2">
-          <button
-            type="button"
-            onClick={newChat}
-            disabled={streaming}
-            className="flex w-full items-center gap-2 rounded-lg border border-neutral-300 px-3 py-2 text-sm hover:bg-neutral-100 disabled:opacity-40 dark:border-neutral-700 dark:hover:bg-neutral-800"
-          >
-            <Plus size={15} /> {t("chat.newChat")}
-          </button>
-        </div>
-        <div className="flex-1 overflow-y-auto px-2 pb-2">
-          <div className="px-1 pb-1 pt-1 text-[10.5px] font-semibold uppercase tracking-wide text-neutral-400">
-            {t("chat.recent")}
+          <div className="p-2">
+            <button
+              type="button"
+              onClick={newChat}
+              disabled={streaming}
+              className="flex w-full items-center gap-2 rounded-lg border border-neutral-300 px-3 py-2 text-sm hover:bg-neutral-100 disabled:opacity-40 dark:border-neutral-700 dark:hover:bg-neutral-800"
+            >
+              <Plus size={15} /> {t("chat.newChat")}
+            </button>
           </div>
-          {conversations.length === 0 ? (
-            <p className="px-1 py-2 text-xs text-neutral-400">
-              {t("chat.noHistory")}
-            </p>
-          ) : (
-            conversations.map((c) => (
-              <div
-                key={c.id}
-                onClick={() => loadConv(c)}
-                className={`group flex cursor-pointer items-center gap-1.5 rounded-lg px-2 py-1.5 ${
-                  activeId === c.id
-                    ? "bg-neutral-100 dark:bg-neutral-800"
-                    : "hover:bg-neutral-100/70 dark:hover:bg-neutral-800/60"
-                }`}
-              >
-                <MessageSquare
-                  size={13}
-                  className="shrink-0 text-neutral-400"
-                />
-                <span className="flex-1 truncate text-[13px]" title={c.title}>
-                  {c.title}
-                </span>
-                <button
-                  type="button"
-                  onClick={(e) => deleteConv(c.id, e)}
-                  className="text-neutral-400 opacity-0 hover:text-red-500 group-hover:opacity-100"
-                  title={t("chat.delete")}
+          <div className="flex-1 overflow-y-auto px-2 pb-2">
+            <div className="px-1 pb-1 pt-1 text-[10.5px] font-semibold uppercase tracking-wide text-neutral-400">
+              {t("chat.recent")}
+            </div>
+            {conversations.length === 0 ? (
+              <p className="px-1 py-2 text-xs text-neutral-400">
+                {t("chat.noHistory")}
+              </p>
+            ) : (
+              conversations.map((c) => (
+                <div
+                  key={c.id}
+                  onClick={() => loadConv(c)}
+                  className={`group flex cursor-pointer items-center gap-1.5 rounded-lg px-2 py-1.5 ${
+                    activeId === c.id
+                      ? "bg-neutral-100 dark:bg-neutral-800"
+                      : "hover:bg-neutral-100/70 dark:hover:bg-neutral-800/60"
+                  }`}
                 >
-                  <Trash2 size={13} />
-                </button>
-              </div>
-            ))
-          )}
+                  <MessageSquare
+                    size={13}
+                    className="shrink-0 text-neutral-400"
+                  />
+                  <span className="flex-1 truncate text-[13px]" title={c.title}>
+                    {c.title}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={(e) => deleteConv(c.id, e)}
+                    className="text-neutral-400 opacity-0 hover:text-red-500 group-hover:opacity-100"
+                    title={t("chat.delete")}
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                </div>
+              ))
+            )}
           </div>
         </aside>
       )}
@@ -696,7 +730,10 @@ export default function ChatView() {
                 >
                   <FileText size={12} />
                   {ocrBusy
-                    ? t("chat.ocrRunning", "Reading pages… (this can take a bit)")
+                    ? t(
+                        "chat.ocrRunning",
+                        "Reading pages… (this can take a bit)",
+                      )
                     : t("chat.ocrRun", "Read it with OCR")}
                 </button>
               )}

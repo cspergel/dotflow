@@ -10,7 +10,8 @@ use crate::settings::{get_settings, write_settings};
 /// Reasoning models (Qwen3.x / Qwythos, DeepSeek-R1, …) emit their chain-of-thought inside `<think>…</think>`
 /// before the answer. Transforms paste their result straight back into the user's document, so any reasoning
 /// must be removed first. Strips every think block (closed), and drops a trailing unclosed one entirely.
-fn strip_reasoning(s: &str) -> String {
+/// `pub(crate)` so the document-summarize map/reduce path can reuse it on each per-chunk generation.
+pub(crate) fn strip_reasoning(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut rest = s;
     while let Some(start) = rest.find("<think>") {
@@ -215,7 +216,10 @@ mod tests {
     #[test]
     fn custom_system_embeds_instruction_and_output_only_guardrail() {
         let s = build_custom_system("translate to Spanish");
-        assert!(s.contains("translate to Spanish"), "instruction is embedded");
+        assert!(
+            s.contains("translate to Spanish"),
+            "instruction is embedded"
+        );
         assert!(
             s.to_lowercase().contains("only"),
             "keeps the 'output ONLY the result' guardrail so the model doesn't add commentary"
