@@ -86,9 +86,9 @@ export default function ChatView() {
   const { recording, toggleMic } = useChatDictation(setInput);
   const [ctxTokens, setCtxTokens] = useState<number>(() => {
     const v = parseInt(localStorage.getItem("dotflow.chat.ctx") ?? "8192", 10);
-    // Cap at 32k — with the q8 KV cache + flash attention the backend uses, a 32k context for a 9B model
-    // fits comfortably in 16 GB VRAM.
-    return Number.isFinite(v) && v >= 512 ? Math.min(v, 32768) : 8192;
+    // Cap at 16k (stable fp16 KV). Bigger fp16 KV for a 9B model risks a CUDA-OOM hard crash on 16 GB; the
+    // path to larger contexts is the llama-server sidecar (crash-isolated), not in-process.
+    return Number.isFinite(v) && v >= 512 ? Math.min(v, 16384) : 8192;
   });
   const [reason, setReason] = useState<boolean>(loadReason);
   const toggleReason = useCallback(() => {
@@ -304,9 +304,9 @@ export default function ChatView() {
       ...next.slice(0, -1).map((m) => ({ role: m.role, content: m.content })),
     ];
     // When a document is attached it can dwarf the selected context window. Grow the context to fit the doc +
-    // answer, capped at a VRAM-safe size. With the q8 KV cache + flash attention the backend uses, 32k fits a
-    // 9B model in 16 GB. Beyond that the backend returns a graceful "doesn't fit" error (never a crash).
-    const SAFE_CTX_CAP = 32768;
+    // answer, capped at a VRAM-safe 16k (stable fp16 KV). Beyond that the backend returns a graceful "doesn't
+    // fit" error, never a crash. Larger docs need the sidecar (crash-isolated) or chunked summarization.
+    const SAFE_CTX_CAP = 16384;
     let effectiveCtx = ctxTokens;
     if (attachedDoc) {
       const needed = usedTokens + 2048; // prompt (incl. doc) + a little answer headroom
@@ -524,7 +524,7 @@ export default function ChatView() {
               disabled={streaming}
               title={t("chat.contextHint")}
             >
-              {[4096, 8192, 16384, 32768].map((n) => (
+              {[4096, 8192, 16384].map((n) => (
                 <option key={n} value={n}>
                   {t("chat.tokensK", { count: n / 1024 })}
                 </option>
