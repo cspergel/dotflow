@@ -43,6 +43,15 @@ fn system_prompt_for(action: &str) -> Option<&'static str> {
         "summarize" => Some(
             "Summarize the user's text concisely. Preserve key facts. Output only the summary.",
         ),
+        "explain" => Some(
+            "Rewrite the user's text in plain, patient-friendly language a non-expert can understand. \
+             Avoid jargon and abbreviations; keep all facts and meaning. Output only the rewritten text.",
+        ),
+        "extract" => Some(
+            "Extract the key clinical items from the user's text as a concise structured list, grouped as \
+             Medications (with doses if stated), Problems/Diagnoses, and Allergies. Use ONLY what the text \
+             states — do not infer or invent. Omit a group if the text has nothing for it. Output only the list.",
+        ),
         _ => None,
     }
 }

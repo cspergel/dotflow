@@ -18,7 +18,13 @@ import { commands } from "@/bindings";
 import { ReviewPanel } from "@/components/settings/cleanup/ReviewPanel";
 import { useChatDictation } from "@/components/chat/useChatDictation";
 
-export type ReviewAction = "proofread" | "rewrite" | "formal" | "summarize";
+export type ReviewAction =
+  | "proofread"
+  | "rewrite"
+  | "formal"
+  | "summarize"
+  | "explain"
+  | "extract";
 // The active view can also be a free-form command ("custom"), which isn't a pinned chip.
 type ActiveAction = ReviewAction | "custom";
 
@@ -40,7 +46,13 @@ export function chipEnabled(
   return action === "proofread" ? true : aiAvailable;
 }
 
-const AI_ACTIONS: ReviewAction[] = ["rewrite", "formal", "summarize"];
+const AI_ACTIONS: ReviewAction[] = [
+  "rewrite",
+  "formal",
+  "summarize",
+  "explain",
+  "extract",
+];
 
 const ReviewOverlay: React.FC = () => {
   const { t } = useTranslation();
@@ -323,6 +335,10 @@ const ReviewOverlay: React.FC = () => {
         return t("settings.review.chip.formal", "Formal");
       case "summarize":
         return t("settings.review.chip.summarize", "Summarize");
+      case "explain":
+        return t("settings.review.chip.explain", "Plain language");
+      case "extract":
+        return t("settings.review.chip.extract", "Extract");
     }
   };
 
