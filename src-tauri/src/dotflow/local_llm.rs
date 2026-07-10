@@ -36,7 +36,7 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
-use llama_cpp_2::context::params::LlamaContextParams;
+use llama_cpp_2::context::params::{KvCacheType, LlamaContextParams};
 use llama_cpp_2::llama_backend::LlamaBackend;
 use llama_cpp_2::llama_batch::LlamaBatch;
 use llama_cpp_2::model::params::LlamaModelParams;
@@ -471,9 +471,16 @@ fn run_generation(
     // real trained length). The KV cache scales linearly with this, so the chat UI exposes it as a setting to
     // trade VRAM for a longer memory.
     let n_ctx = requested_n_ctx.clamp(512, model.n_ctx_train().max(512));
-    let ctx_params = LlamaContextParams::default().with_n_ctx(Some(
-        NonZeroU32::new(n_ctx).unwrap_or(NonZeroU32::new(2048).unwrap()),
-    ));
+    // Quantize the KV cache to 8-bit (q8_0) — HALVES its VRAM vs the fp16 default, so a large context (e.g.
+    // 32k) fits in 16 GB alongside a 9B model's weights. Quantized KV requires flash attention, so enable it
+    // explicitly. The quality hit from 8-bit K/V is negligible in practice.
+    let ctx_params = LlamaContextParams::default()
+        .with_n_ctx(Some(
+            NonZeroU32::new(n_ctx).unwrap_or(NonZeroU32::new(2048).unwrap()),
+        ))
+        .with_type_k(KvCacheType::Q8_0)
+        .with_type_v(KvCacheType::Q8_0)
+        .with_flash_attention_policy(llama_cpp_sys_2::LLAMA_FLASH_ATTN_TYPE_ENABLED);
     let mut ctx = model
         .new_context(backend, ctx_params)
         .map_err(|e| format!("failed to create context: {e}"))?;

@@ -2795,6 +2795,7 @@ dependencies = [
  "hound",
  "image",
  "llama-cpp-2",
+ "llama-cpp-sys-2",
  "log",
  "lopdf",
  "natural",

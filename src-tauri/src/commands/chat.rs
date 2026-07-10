@@ -145,10 +145,10 @@ pub async fn chat_stream(
             .collect();
 
         // Context window: 0 means "use the default"; otherwise the value the chat UI's setting chose. Clamp
-        // to a VRAM-safe ceiling — a larger KV cache for a ~9B model on top of the weights can exceed a
-        // 16 GB GPU and CUDA-OOM into a HARD CRASH (not a catchable Rust error). 16k keeps us safe. The engine
+        // to a VRAM-safe ceiling. With the q8 KV cache + flash attention the generator uses, 32k fits a 9B
+        // model in 16 GB; going higher risks a CUDA-OOM HARD CRASH (not a catchable error). The engine
         // additionally clamps to the model's trained max.
-        let n_ctx = (if n_ctx == 0 { 8192 } else { n_ctx }).min(16384);
+        let n_ctx = (if n_ctx == 0 { 8192 } else { n_ctx }).min(32768);
 
         // Drop any stale cancel flag from a previous turn that reused this id.
         clear_cancel(id);
