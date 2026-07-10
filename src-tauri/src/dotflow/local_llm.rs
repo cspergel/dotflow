@@ -422,7 +422,9 @@ fn generate_chat_inner(
             &prompt,
             add_bos,
             max_new_tokens,
-            8192,
+            // 16384 (was 8192) so a longer selection + a reasoning model's <think> pass + the answer all fit
+            // before the context cap. Clamped down to the model's trained max inside run_generation.
+            16384,
             &mut |_| {},
             &|| false,
         )

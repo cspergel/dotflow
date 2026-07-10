@@ -96,9 +96,12 @@ async fn run_transform(app: &AppHandle, system_base: &str, text: &str) -> Result
             if model_path.exists() {
                 let system = system.clone();
                 let text = text.to_string();
-                // Output ≈ input length; budget ~2× input + headroom, clamped. The generator runs an
-                // 8192-token context and caps generation to the room after the prompt, so this can't overflow.
-                let max_new = (text.chars().count() / 4 * 2 + 512).clamp(768, 4096);
+                // Output ≈ input length; budget ~2× input + generous reasoning headroom, clamped. A reasoning
+                // model (Qwythos/Qwen3.x) that ignores /no_think spends tokens thinking before answering, so
+                // the floor must be high enough to fit a full reasoning pass AND the answer (a mid-<think>
+                // cutoff strips to empty). The generator's context caps generation to the room after the
+                // prompt, so a generous value here can't overflow — it only stops early on EOS.
+                let max_new = (text.chars().count() / 4 * 2 + 2048).clamp(2048, 8192);
                 let out = tauri::async_runtime::spawn_blocking(move || {
                     crate::dotflow::local_llm::generate_chat(&model_path, &system, &text, max_new)
                 })
@@ -108,7 +111,10 @@ async fn run_transform(app: &AppHandle, system_base: &str, text: &str) -> Result
                 return out.and_then(|s| {
                     let s = strip_reasoning(&s);
                     if s.is_empty() {
-                        Err("The local model returned an empty result — try again or a larger model."
+                        Err("The local model produced only reasoning and no answer. If you're using a \
+                             reasoning model (e.g. Qwythos), turn the \"Reason\" toggle OFF for a quick edit, \
+                             or set a small non-reasoning model (e.g. Gemma) for transforms in Settings → \
+                             Text Cleanup → Transforms model."
                             .to_string())
                     } else {
                         Ok(s)

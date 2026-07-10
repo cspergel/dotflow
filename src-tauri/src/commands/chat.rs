@@ -154,10 +154,14 @@ pub async fn chat_stream(
         let app_task = app.clone();
         let result = tauri::async_runtime::spawn_blocking(move || {
             let app_tok = app_task.clone();
+            // Answer-length cap. 1024 was too small — long answers (and any <think> pass) got cut off. Cap
+            // generously; the engine caps generation to the room left in n_ctx after the prompt anyway, so a
+            // large value just lets a full answer finish rather than truncating it (generation stops at EOS).
+            let max_answer_tokens = 8192;
             local_llm::generate_chat_stream(
                 &model_path,
                 &turns,
-                1024,
+                max_answer_tokens,
                 n_ctx,
                 |piece| {
                     let _ = app_tok.emit(
