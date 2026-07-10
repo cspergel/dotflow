@@ -27,23 +27,43 @@ pub async fn read_pdf_text(path: String) -> Result<String, String> {
         return Err("Not a PDF file.".to_string());
     }
 
+    let p_text = p.clone();
     let text = tauri::async_runtime::spawn_blocking(move || {
-        pdf_extract::extract_text(&p).map_err(|e| format!("Couldn't read this PDF: {e}"))
+        pdf_extract::extract_text(&p_text).map_err(|e| format!("Couldn't read this PDF: {e}"))
     })
     .await
     .map_err(|e| format!("PDF read task failed: {e}"))??;
 
     let trimmed = text.trim();
+    let chars = trimmed.chars().count();
     if trimmed.is_empty() {
         return Err(
-            "No selectable text found — this looks like a scanned PDF. OCR for scanned documents \
-             isn't available yet."
+            "No selectable text found — this is a scanned PDF (images of text). Reading scanned \
+             documents needs OCR, which isn't available in DotFlow yet."
                 .to_string(),
         );
     }
 
+    // Detect a scanned/image PDF that carries only scraps of embedded text (page numbers, form labels):
+    // very low text density per page. Without this, we'd "summarize" a few hundred characters of noise.
+    let page_count = tauri::async_runtime::spawn_blocking(move || {
+        lopdf::Document::load(&p)
+            .ok()
+            .map(|d| d.get_pages().len())
+            .unwrap_or(0)
+    })
+    .await
+    .unwrap_or(0);
+    if page_count >= 3 && chars < page_count * 120 {
+        return Err(format!(
+            "This looks like a scanned document — only {chars} characters of text across {page_count} \
+             pages (~{} per page). Reading scanned PDFs needs OCR, which isn't available in DotFlow yet.",
+            chars / page_count.max(1)
+        ));
+    }
+
     // Truncate a very large document (with a visible note) so it can't overflow the context window.
-    if trimmed.chars().count() > MAX_CHARS {
+    if chars > MAX_CHARS {
         let mut out: String = trimmed.chars().take(MAX_CHARS).collect();
         out.push_str("\n\n[Document truncated — it was too long to include in full.]");
         return Ok(out);
