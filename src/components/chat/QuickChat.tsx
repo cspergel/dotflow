@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { commands } from "../../bindings";
 import { sanitize, parseThinking } from "./chatText";
+import { ChatMarkdown } from "./ChatMarkdown";
 import { useChatDictation } from "./useChatDictation";
 import {
   upsertConversation,
@@ -253,22 +254,30 @@ export default function QuickChat() {
         ) : (
           <div className="flex flex-col gap-3">
             {messages.map((m, i) => {
-              const content =
-                m.role === "assistant"
-                  ? parseThinking(sanitize(m.content)).answer
-                  : m.content;
+              if (m.role === "user") {
+                return (
+                  <div
+                    key={i}
+                    className="max-w-[85%] self-end rounded-xl bg-neutral-100 px-2.5 py-1.5 whitespace-pre-wrap dark:bg-neutral-800"
+                  >
+                    {m.content}
+                  </div>
+                );
+              }
+              const answer = parseThinking(sanitize(m.content)).answer;
+              const placeholder =
+                streaming && i === messages.length - 1 ? "…" : "";
               return (
-                <div
-                  key={i}
-                  className={
-                    m.role === "user"
-                      ? "self-end max-w-[85%] rounded-xl bg-neutral-100 px-2.5 py-1.5 dark:bg-neutral-800"
-                      : "max-w-[92%] select-text self-start whitespace-pre-wrap " +
-                        (m.error ? "text-red-600" : "text-neutral-800 dark:text-neutral-100")
-                  }
-                >
-                  {content ||
-                    (streaming && i === messages.length - 1 ? "…" : "")}
+                <div key={i} className="max-w-[92%] select-text self-start">
+                  {m.error ? (
+                    <span className="whitespace-pre-wrap text-red-600">
+                      {answer || placeholder}
+                    </span>
+                  ) : answer ? (
+                    <ChatMarkdown>{answer}</ChatMarkdown>
+                  ) : (
+                    <span className="text-neutral-400">{placeholder}</span>
+                  )}
                 </div>
               );
             })}

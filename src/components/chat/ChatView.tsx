@@ -28,6 +28,7 @@ import {
 import { open } from "@tauri-apps/plugin-dialog";
 import { commands, type LocalModelInfo } from "../../bindings";
 import { sanitize, parseThinking } from "./chatText";
+import { ChatMarkdown } from "./ChatMarkdown";
 import { useChatDictation } from "./useChatDictation";
 import {
   loadConversations,
@@ -140,7 +141,10 @@ export default function ChatView() {
     try {
       const picked = await open({
         multiple: false,
-        filters: [{ name: "PDF", extensions: ["pdf"] }],
+        filters: [
+          { name: "PDF", extensions: ["pdf", "PDF"] },
+          { name: "All files", extensions: ["*"] },
+        ],
       });
       if (typeof picked !== "string") return;
       setAttachError(null);
@@ -232,10 +236,12 @@ export default function ChatView() {
 
   const send = useCallback(async () => {
     if (streaming) return;
-    // With a document attached, an empty box means "summarize it".
+    // With a document attached, an empty box means "summarize the whole thing".
     const text =
       input.trim() ||
-      (attachedDoc ? "Please summarize the attached document." : "");
+      (attachedDoc
+        ? "Summarize the entire attached document — cover all of its sections and pages, not just the beginning."
+        : "");
     if (!text) return;
     let id = activeId;
     if (!id) {
@@ -268,12 +274,31 @@ export default function ChatView() {
       ...docContext,
       ...next.slice(0, -1).map((m) => ({ role: m.role, content: m.content })),
     ];
-    const res = await commands.chatStream(turn, payload, ctxTokens);
+    // When a document is attached it can dwarf the selected context window. Auto-expand the context to hold
+    // the whole doc + conversation + answer (VRAM-safe cap ~32k); the backend clamps to the model's max.
+    let effectiveCtx = ctxTokens;
+    if (attachedDoc) {
+      const needed = usedTokens + 8192 + 1024; // prompt (incl. doc) + answer budget + margin
+      effectiveCtx = Math.min(
+        Math.max(ctxTokens, Math.ceil(needed / 2048) * 2048),
+        32768,
+      );
+    }
+    const res = await commands.chatStream(turn, payload, effectiveCtx);
     if (res.status === "error" && turn === turnIdRef.current) {
       setMessages((m) => replaceLastAssistant(m, res.error, true));
       setStreaming(false);
     }
-  }, [input, streaming, messages, activeId, ctxTokens, reason, attachedDoc]);
+  }, [
+    input,
+    streaming,
+    messages,
+    activeId,
+    ctxTokens,
+    reason,
+    attachedDoc,
+    usedTokens,
+  ]);
 
   const stop = useCallback(async () => {
     await commands.chatCancel(turnIdRef.current);
@@ -569,20 +594,23 @@ export default function ChatView() {
                               </div>
                             </details>
                           )}
-                          <div
-                            className={`select-text cursor-text whitespace-pre-wrap leading-relaxed ${
-                              m.error
-                                ? "text-red-600"
-                                : "text-neutral-800 dark:text-neutral-100"
-                            }`}
-                          >
-                            {answer ||
-                              (streaming && isLast
+                          {m.error ? (
+                            <div className="select-text whitespace-pre-wrap leading-relaxed text-red-600">
+                              {answer}
+                            </div>
+                          ) : answer ? (
+                            <div className="select-text cursor-text leading-relaxed">
+                              <ChatMarkdown>{answer}</ChatMarkdown>
+                            </div>
+                          ) : (
+                            <div className="leading-relaxed text-neutral-500">
+                              {streaming && isLast
                                 ? thinking
                                   ? t("chat.thinking")
                                   : "…"
-                                : "")}
-                          </div>
+                                : ""}
+                            </div>
+                          )}
                         </>
                       );
                     })()
@@ -609,6 +637,11 @@ export default function ChatView() {
                     title={attachedDoc.name}
                   >
                     {attachedDoc.name}
+                  </span>
+                  <span className="text-neutral-400">
+                    {t("chat.docChars", "· {{n}} chars", {
+                      n: attachedDoc.text.length.toLocaleString(),
+                    })}
                   </span>
                   <button
                     type="button"
