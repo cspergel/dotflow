@@ -475,9 +475,19 @@ fn run_generation(
     // forcing q8 KV + flash attention to fit 32k aborted at context creation on the RTX 5080 — an uncatchable
     // CUDA crash — so we keep the safe path and cap the context conservatively instead. The robust route to
     // bigger contexts is the llama-server sidecar, where a crash can't take down the app.)
-    let ctx_params = LlamaContextParams::default().with_n_ctx(Some(
-        NonZeroU32::new(n_ctx).unwrap_or(NonZeroU32::new(2048).unwrap()),
-    ));
+    //
+    // n_batch = the full context. The whole prompt is submitted to `decode` in ONE call, and llama.cpp asserts
+    // `n_tokens_all <= n_batch` (`llama-context.cpp:1712`) — with the default n_batch of 2048, any prompt longer
+    // than 2048 tokens (every document-summarize chunk is ~7k) HARD-ABORTS the process (uncatchable). Raising
+    // n_batch to n_ctx accepts prompts up to the context size; llama.cpp still processes them internally in
+    // n_ubatch (default 512) micro-batches, so the compute-buffer VRAM is unchanged — this only lifts the
+    // logical per-decode token limit. The prompt is already validated to be `< n_ctx` below, so n_batch = n_ctx
+    // is always sufficient.
+    let ctx_params = LlamaContextParams::default()
+        .with_n_ctx(Some(
+            NonZeroU32::new(n_ctx).unwrap_or(NonZeroU32::new(2048).unwrap()),
+        ))
+        .with_n_batch(n_ctx);
     let mut ctx = model
         .new_context(backend, ctx_params)
         .map_err(|e| format!("failed to create context: {e}"))?;
