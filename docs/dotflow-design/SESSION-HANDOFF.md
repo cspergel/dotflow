@@ -92,6 +92,24 @@ vision** via its `mmproj-*.gguf` (= base Qwen3.5-9B multimodal) — not yet wire
    GPU/ONNX or VLM OCR path.
 3. Sanity-check the rest of the session's features in real use.
 
+## Queued for the NEXT build (2026-07-10, not yet built)
+
+- **Updater fix (committed, needs a build to take effect):** the updater endpoint pointed at
+  `cjpais/Handy/releases` → the app offered a **Handy** update that would clobber the DotFlow-GPU build.
+  Repointed to `cspergel/dotflow` (no release asset → goes quiet). Until the next build+swap, **tell the user
+  NOT to click the update prompt.** Long-term: probably disable the updater entirely for the manually-swapped
+  GPU build.
+- **Chunked / map-reduce document summarization (designed, NOT built — build this first).** A big doc (e.g.
+  the user's 98k-char / ~33k-token chart) doesn't fit even a 32k context, so one-shot summarize returns a
+  graceful "prompt does not fit" error. Fix = map-reduce, entirely within the stable 16k: chunk the text
+  (~28k chars/chunk at line boundaries) → per-chunk `generate_chat` extracting facts toward the user's
+  instruction (append `/no_think`, ~1536 tok out, strip `<think>`) → final `generate_chat` synthesizing the
+  section notes into one result (~4096 tok out). New command `summarize_document(app, text, instruction)` in
+  `commands/document.rs`, emit `doc-summarize-progress {done,total}` events; make `ai::strip_reasoning`
+  `pub(crate)`; add a `use tauri::{AppHandle, Emitter};`. Frontend: when an attached doc's est. tokens exceed
+  the context, route the send to `summarizeDocument` (show progress) instead of `chat_stream`; result becomes
+  the assistant message. User's target task: hospital chart → comprehensive HPI for a SNF admission note.
+
 ## Upcoming work (prioritized, discussed with user)
 
 - **Vision via `llama-server` sidecar** — the big foundational investment. Qwythos+mmproj behind an
