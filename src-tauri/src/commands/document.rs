@@ -216,16 +216,23 @@ fn synthesize(
     let system = format!(
         "You are given FACTS extracted, in order, from every part of a document. Using ONLY these facts — \
          do not invent, assume, or add anything not present — complete the user's request below. Write a \
-         single coherent result, not a list of the parts.\n\nRequest: {instruction}\n\n/no_think"
+         single coherent result, not a list of the parts. Output the result directly with no preamble and no \
+         explanation of your process.\n\nRequest: {instruction}\n\n/no_think"
     );
-    let out = crate::dotflow::local_llm::generate_chat(model_path, &system, facts, 4096)?;
+    // 8192 (was 4096): a reasoning model (e.g. Qwythos) that ignores `/no_think` spends tokens thinking before
+    // the answer; a small budget gets fully consumed by an unclosed <think>, which strips to empty. A bigger
+    // budget lets the reasoning pass AND the answer fit. The context caps generation to the room after the
+    // prompt anyway, so this only stops early on EOS. (A non-reasoning transform model like Gemma is still the
+    // fast, reliable choice — see the empty-result guidance below.)
+    let out = crate::dotflow::local_llm::generate_chat(model_path, &system, facts, 8192)?;
     let cleaned = crate::commands::ai::strip_reasoning(&out)
         .trim()
         .to_string();
     if cleaned.is_empty() {
         return Err(
-            "The model produced no summary. Try a different model for summarization in \
-                    Settings, or a shorter document."
+            "The model produced only reasoning and no summary. This happens with reasoning models \
+             (e.g. Qwythos) on long documents. Set a small non-reasoning model (e.g. Gemma) as the \
+             Transforms model in Settings → Text Cleanup — it's faster and reliable for summaries."
                 .to_string(),
         );
     }

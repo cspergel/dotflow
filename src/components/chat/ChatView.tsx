@@ -24,6 +24,7 @@ import {
   Paperclip,
   FileText,
   X,
+  Loader2,
 } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { commands, type LocalModelInfo } from "../../bindings";
@@ -112,8 +113,14 @@ export default function ChatView() {
   const [ocrBusy, setOcrBusy] = useState(false);
   const turnIdRef = useRef(0);
   // True while a big-document map/reduce summary is running, so the `doc-summarize-progress` listener knows to
-  // paint progress into the last assistant bubble (and normal chat streams don't).
+  // update the progress state (and normal chat streams don't).
   const summarizeActiveRef = useRef(false);
+  // Live map/reduce progress for the in-flight summary (null when not summarizing) → drives the spinner + label.
+  const [summarizeProgress, setSummarizeProgress] = useState<{
+    done: number;
+    total: number;
+    stage: string;
+  } | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
 
@@ -250,15 +257,12 @@ export default function ChatView() {
       setMessages((m) => replaceLastAssistant(m, e.payload.message, true));
       setStreaming(false);
     }).then((u) => unlisten.push(u));
-    // Big-document summarize progress: paint the current step into the assistant bubble as it maps/reduces.
+    // Big-document summarize progress: drive the spinner + label as it maps/reduces.
     void listen<{ done: number; total: number; stage: string }>(
       "doc-summarize-progress",
       (e) => {
         if (!summarizeActiveRef.current) return;
-        const { done, total, stage } = e.payload;
-        setMessages((m) =>
-          replaceLastAssistant(m, `_${stage} — step ${done} of ${total}…_`),
-        );
+        setSummarizeProgress(e.payload);
       },
     ).then((u) => unlisten.push(u));
     return () => unlisten.forEach((u) => u());
@@ -308,9 +312,15 @@ export default function ChatView() {
     const SAFE_CTX_CAP = 16384;
     if (attachedDoc && usedTokens + 2048 > SAFE_CTX_CAP) {
       summarizeActiveRef.current = true;
-      setMessages((m) => replaceLastAssistant(m, "_Reading the document…_"));
+      // Seed the spinner immediately; the backend's progress events refine the label as it works.
+      setSummarizeProgress({
+        done: 0,
+        total: 0,
+        stage: t("chat.summarizeReading", "Reading the document"),
+      });
       const res = await commands.summarizeDocument(attachedDoc.text, text);
       summarizeActiveRef.current = false;
+      setSummarizeProgress(null);
       if (turn === turnIdRef.current) {
         if (res.status === "ok") {
           setMessages((m) => replaceLastAssistant(m, res.data));
@@ -666,6 +676,14 @@ export default function ChatView() {
                           ) : answer ? (
                             <div className="select-text cursor-text leading-relaxed">
                               <ChatMarkdown>{answer}</ChatMarkdown>
+                            </div>
+                          ) : summarizeProgress && isLast ? (
+                            <div className="flex items-center gap-2 text-neutral-500">
+                              <Loader2
+                                size={15}
+                                className="animate-spin text-emerald-600"
+                              />
+                              <span>{summarizeProgress.stage}…</span>
                             </div>
                           ) : (
                             <div className="leading-relaxed text-neutral-500">

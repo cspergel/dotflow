@@ -47,6 +47,7 @@
     "copy": "Copy",
     "reasoning": "Reasoning",
     "thinking": "Thinking…",
+    "summarizeReading": "Reading the document",
     "empty": "Ask your offline model anything.",
     "placeholder": "Ask anything…  (Enter to send, Shift+Enter for newline)",
     "send": "Send",
