@@ -33,6 +33,32 @@ pub async fn ocr_pdf(path: String) -> Result<String, String> {
     Ok(trimmed.to_string())
 }
 
+/// Run pdf-extract's text extraction CRASH-SAFELY. It can deeply recurse on malformed/complex PDFs (nested
+/// fonts / XObjects) and overflow the default small thread stack — an UNCATCHABLE process abort that would
+/// take down the whole app. Isolate it on a dedicated 256 MB-stack thread and catch panics, so a bad PDF
+/// returns a graceful error instead. (Observed: a text PDF with `Helvetica-Bold` / `.notdef` glyphs crashed.)
+fn extract_pdf_text_safe(path: std::path::PathBuf) -> Result<String, String> {
+    let handle = std::thread::Builder::new()
+        .name("pdf-extract".into())
+        .stack_size(256 * 1024 * 1024)
+        .spawn(move || {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                pdf_extract::extract_text(&path)
+            }))
+        })
+        .map_err(|e| format!("Failed to start the PDF reader: {e}"))?;
+    match handle.join() {
+        Ok(Ok(Ok(text))) => Ok(text),
+        Ok(Ok(Err(e))) => Err(format!("Couldn't read this PDF: {e}")),
+        Ok(Err(_)) => Err(
+            "This PDF couldn't be read — its internal structure broke the text parser. Re-export/print it \
+             to a fresh PDF, or if it's scanned use the OCR option."
+                .to_string(),
+        ),
+        Err(_) => Err("The PDF reader failed unexpectedly.".to_string()),
+    }
+}
+
 /// Extract the text of a PDF at `path`. Runs the (CPU-bound) parse on a blocking thread. Returns the trimmed
 /// text, or a user-facing error: file-missing, not-a-PDF, parse failure, or an empty result (scanned PDF).
 #[tauri::command]
@@ -52,11 +78,9 @@ pub async fn read_pdf_text(path: String) -> Result<String, String> {
     }
 
     let p_text = p.clone();
-    let text = tauri::async_runtime::spawn_blocking(move || {
-        pdf_extract::extract_text(&p_text).map_err(|e| format!("Couldn't read this PDF: {e}"))
-    })
-    .await
-    .map_err(|e| format!("PDF read task failed: {e}"))??;
+    let text = tauri::async_runtime::spawn_blocking(move || extract_pdf_text_safe(p_text))
+        .await
+        .map_err(|e| format!("PDF read task failed: {e}"))??;
 
     let trimmed = text.trim();
     let chars = trimmed.chars().count();
