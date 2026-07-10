@@ -56,16 +56,40 @@ fn ocr_image(engine: &OcrEngine, img: &image::DynamicImage) -> Result<String, St
         .map_err(|e| format!("OCR text extraction failed: {e}"))
 }
 
-/// OCR every rasterized page and join into one document, separating pages with blank lines.
+/// OCR every rasterized page and join into one document, separating pages with blank lines. Page-tolerant: a
+/// page that fails to OCR is skipped (logged) rather than discarding the whole document — only an all-pages
+/// failure errors. Appends a short note if any pages were skipped.
 pub fn ocr_pages(images: &[image::DynamicImage]) -> Result<String, String> {
     let engine = load_engine()?;
     let mut out = String::new();
+    let mut ok_pages = 0usize;
+    let mut failed = 0usize;
     for (i, img) in images.iter().enumerate() {
-        let text = ocr_image(&engine, img)?;
-        if i > 0 {
-            out.push_str("\n\n");
+        match ocr_image(&engine, img) {
+            Ok(text) => {
+                if ok_pages > 0 {
+                    out.push_str("\n\n");
+                }
+                out.push_str(text.trim());
+                ok_pages += 1;
+            }
+            Err(e) => {
+                log::warn!("OCR: skipped page {} of {}: {e}", i + 1, images.len());
+                failed += 1;
+            }
         }
-        out.push_str(text.trim());
+    }
+    if ok_pages == 0 {
+        return Err(format!(
+            "OCR couldn't read any of the {} page(s).",
+            images.len()
+        ));
+    }
+    if failed > 0 {
+        out.push_str(&format!(
+            "\n\n[Note: {failed} of {} page(s) couldn't be read and were skipped.]",
+            images.len()
+        ));
     }
     Ok(out)
 }

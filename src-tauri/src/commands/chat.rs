@@ -144,9 +144,11 @@ pub async fn chat_stream(
             })
             .collect();
 
-        // Context window: 0 means "use the default"; otherwise the value the chat UI's setting chose. The
-        // engine clamps this to what the model was actually trained on.
-        let n_ctx = if n_ctx == 0 { 8192 } else { n_ctx };
+        // Context window: 0 means "use the default"; otherwise the value the chat UI's setting chose. Clamp
+        // to a VRAM-safe ceiling — a larger KV cache for a ~9B model on top of the weights can exceed a
+        // 16 GB GPU and CUDA-OOM into a HARD CRASH (not a catchable Rust error). 16k keeps us safe. The engine
+        // additionally clamps to the model's trained max.
+        let n_ctx = (if n_ctx == 0 { 8192 } else { n_ctx }).min(16384);
 
         // Drop any stale cancel flag from a previous turn that reused this id.
         clear_cancel(id);

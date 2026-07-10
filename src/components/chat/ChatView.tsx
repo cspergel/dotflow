@@ -86,7 +86,8 @@ export default function ChatView() {
   const { recording, toggleMic } = useChatDictation(setInput);
   const [ctxTokens, setCtxTokens] = useState<number>(() => {
     const v = parseInt(localStorage.getItem("dotflow.chat.ctx") ?? "8192", 10);
-    return Number.isFinite(v) && v >= 512 ? v : 8192;
+    // Cap at 16k: a larger KV cache for a 9B model can exceed 16 GB VRAM and hard-crash on CUDA OOM.
+    return Number.isFinite(v) && v >= 512 ? Math.min(v, 16384) : 8192;
   });
   const [reason, setReason] = useState<boolean>(loadReason);
   const toggleReason = useCallback(() => {
@@ -301,14 +302,17 @@ export default function ChatView() {
       ...docContext,
       ...next.slice(0, -1).map((m) => ({ role: m.role, content: m.content })),
     ];
-    // When a document is attached it can dwarf the selected context window. Auto-expand the context to hold
-    // the whole doc + conversation + answer (VRAM-safe cap ~32k); the backend clamps to the model's max.
+    // When a document is attached it can dwarf the selected context window. Grow the context to fit the doc +
+    // answer, but cap it HARD at a VRAM-safe size: a large KV cache for a 9B model on top of the weights can
+    // exceed 16 GB and CUDA-OOM into a hard crash (not a catchable error). 16k keeps the model + KV well
+    // under 16 GB. If a doc is too big to fit, the backend returns a graceful "doesn't fit" error instead.
+    const SAFE_CTX_CAP = 16384;
     let effectiveCtx = ctxTokens;
     if (attachedDoc) {
-      const needed = usedTokens + 8192 + 1024; // prompt (incl. doc) + answer budget + margin
+      const needed = usedTokens + 2048; // prompt (incl. doc) + a little answer headroom
       effectiveCtx = Math.min(
         Math.max(ctxTokens, Math.ceil(needed / 2048) * 2048),
-        32768,
+        SAFE_CTX_CAP,
       );
     }
     const res = await commands.chatStream(turn, payload, effectiveCtx);
@@ -520,7 +524,7 @@ export default function ChatView() {
               disabled={streaming}
               title={t("chat.contextHint")}
             >
-              {[4096, 8192, 16384, 32768, 65536, 131072].map((n) => (
+              {[4096, 8192, 16384].map((n) => (
                 <option key={n} value={n}>
                   {t("chat.tokensK", { count: n / 1024 })}
                 </option>
