@@ -92,23 +92,44 @@ vision** via its `mmproj-*.gguf` (= base Qwen3.5-9B multimodal) — not yet wire
    GPU/ONNX or VLM OCR path.
 3. Sanity-check the rest of the session's features in real use.
 
-## Queued for the NEXT build (2026-07-10, not yet built)
+## Committed, needs a BUILD + SWAP to take effect (as of 2026-07-10)
 
-- **Updater fix (committed, needs a build to take effect):** the updater endpoint pointed at
-  `cjpais/Handy/releases` → the app offered a **Handy** update that would clobber the DotFlow-GPU build.
-  Repointed to `cspergel/dotflow` (no release asset → goes quiet). Until the next build+swap, **tell the user
-  NOT to click the update prompt.** Long-term: probably disable the updater entirely for the manually-swapped
-  GPU build.
-- **Chunked / map-reduce document summarization (designed, NOT built — build this first).** A big doc (e.g.
-  the user's 98k-char / ~33k-token chart) doesn't fit even a 32k context, so one-shot summarize returns a
-  graceful "prompt does not fit" error. Fix = map-reduce, entirely within the stable 16k: chunk the text
-  (~28k chars/chunk at line boundaries) → per-chunk `generate_chat` extracting facts toward the user's
-  instruction (append `/no_think`, ~1536 tok out, strip `<think>`) → final `generate_chat` synthesizing the
-  section notes into one result (~4096 tok out). New command `summarize_document(app, text, instruction)` in
-  `commands/document.rs`, emit `doc-summarize-progress {done,total}` events; make `ai::strip_reasoning`
-  `pub(crate)`; add a `use tauri::{AppHandle, Emitter};`. Frontend: when an attached doc's est. tokens exceed
-  the context, route the send to `summarizeDocument` (show progress) instead of `chat_stream`; result becomes
-  the assistant message. User's target task: hospital chart → comprehensive HPI for a SNF admission note.
+Both of these are on `feat/ai-chat-gpu` but the running app is the older 2026-07-08 build. They go live only
+after the user rebuilds (`local-llm-cuda`, the CUDA env recipe above) and swaps the exe into dotflow-gpu.
+
+- **Chunked / map-reduce document summarization — BUILT (commit `6833ec6`).** Summarizes a document of ANY
+  size within the stable 16k window, so the 98k-char chart → comprehensive HPI finally works. New command
+  `summarize_document(app, text, instruction)` in `commands/document.rs`: `chunk_text` splits at line
+  boundaries (**22k chars/chunk** — sized to fit the engine's 16k ctx with margin), MAPs each chunk →
+  extracted facts via `generate_chat` with `/no_think` (2048 tok out, `strip_reasoning`), then REDUCEs all
+  facts into the user's requested output (4096 tok out). Recurses **one bounded level** if the combined facts
+  exceed **24k chars** (`REDUCE_THRESHOLD`), and truncates-with-note at the depth cap → **can never overflow
+  context**. Emits `doc-summarize-progress {done,total,stage}`. Uses the per-task **"transform" model**
+  (Gemma if set — fast, no reasoning-burn), falling back to the chat model. `ai::strip_reasoning` is now
+  `pub(crate)`. Frontend (`ChatView.tsx`): when an attached doc's est. tokens + 2048 exceed 16k, the send
+  auto-routes to `summarizeDocument` (progress painted into the reply bubble) instead of `chat_stream`.
+  Compiles under `--features local-llm` (verified); 4 chunk_text unit tests pass (round-trip loses nothing,
+  line-boundary, hard-split, UTF-8 boundary). **Deviations from the original design:** 22k chunk (not 28k) &
+  2048 extract budget (not 1536) to stay safely under 16k on any model; added recursion + depth-cap
+  truncation for overflow-proofing; `bindings.ts` hand-added `summarizeDocument` (release build doesn't
+  re-export specta bindings — a `tauri dev` run regenerates them).
+  **PENDING USER TEST:** build+swap, attach the scanned chart (OCR), send "summarize into a comprehensive HPI
+  for a SNF admission note", confirm progress + a coherent HPI.
+- **Updater fix (committed earlier `b4ddebd`, needs the build):** endpoint was `cjpais/Handy/releases` → the
+  app offered a **Handy** update that would clobber DotFlow-GPU. Repointed to `cspergel/dotflow` (no release
+  asset → goes quiet). **Until the next build+swap, do NOT click the update prompt.** Long-term: probably
+  disable the updater entirely for the manually-swapped GPU build.
+
+## On 32k context (user keeps asking)
+
+The user wants 32k. The honest position, re-confirmed 2026-07-10: **in-process 32k is not safely deliverable**
+— fp16 KV at 32k for a 9B model (~9 GB) + weights (~5.5 GB) + compute buffers exceeds 16 GB → CUDA OOM =
+**uncatchable C-level abort** (bypasses Rust `catch_unwind`). The q8-KV+flash-attn fix that WOULD fit crashed
+at context creation on the 5080 (Blackwell flash-attn kernel in the Rust binding). And 32k wouldn't even fit
+the user's 98k-char chart (~25–30k tokens + answer). **The real answer to "32k" is the sidecar** (below):
+`llama-server -c 32768 -ctk q8_0 -ctv q8_0 -fa` in a subprocess — battle-tested (not a Rust binding), and an
+OOM there fails one request instead of the app. Chunked-summarize already removes the *need* for 32k on
+documents; the sidecar covers long-chat memory + vision. **Next build = the sidecar.**
 
 ## Upcoming work (prioritized, discussed with user)
 
