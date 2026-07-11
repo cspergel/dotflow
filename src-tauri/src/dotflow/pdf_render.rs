@@ -6,6 +6,7 @@
 //! §Document ingestion.
 
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use pdfium_render::prelude::*;
 
@@ -14,8 +15,15 @@ use pdfium_render::prelude::*;
 /// (one page image resident at a time, see [`for_each_page`]) keeps memory flat regardless of this cap.
 pub const MAX_PAGES: usize = 400;
 
-/// Bind to the bundled `pdfium.dll` (next to the exe), falling back to a system-installed copy.
-fn bind() -> Result<Pdfium, String> {
+/// pdfium binds its native library process-GLOBALLY (`FPDF_InitLibrary`): binding a second time fails with
+/// `PdfiumLibraryBindingsAlreadyInitialized`, which broke every OCR after the first in a session. So bind ONCE
+/// and cache it here, reusing it for all subsequent OCRs. The mutex also serializes access — pdfium is not
+/// thread-safe, and OCR runs on the blocking pool where calls could otherwise land on different threads.
+static PDFIUM: Mutex<Option<Pdfium>> = Mutex::new(None);
+
+/// Bind to the bundled `pdfium.dll` (next to the exe), falling back to a system-installed copy. Called at most
+/// once per process (result cached in [`PDFIUM`]).
+fn bind_new() -> Result<Pdfium, String> {
     if let Some(dir) = std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(PathBuf::from))
@@ -41,7 +49,14 @@ pub fn for_each_page<T>(
     max_pages: usize,
     mut f: impl FnMut(usize, usize, image::DynamicImage) -> T,
 ) -> Result<Vec<T>, String> {
-    let pdfium = bind()?;
+    // Hold the pdfium lock for the whole document: binds once (cached), reuses on later OCRs, and serializes
+    // access to the non-thread-safe library.
+    let mut guard = PDFIUM.lock().unwrap_or_else(|e| e.into_inner());
+    if guard.is_none() {
+        *guard = Some(bind_new()?);
+    }
+    let pdfium = guard.as_ref().expect("pdfium bound above");
+
     let path_str = pdf_path.to_str().ok_or("PDF path is not valid UTF-8")?;
     let doc = pdfium
         .load_pdf_from_file(path_str, None)
