@@ -54,10 +54,7 @@ pub struct ChatErrorEvent {
 static CHAT_CANCEL: Lazy<Mutex<HashSet<u64>>> = Lazy::new(|| Mutex::new(HashSet::new()));
 
 fn cancel_requested(id: u64) -> bool {
-    CHAT_CANCEL
-        .lock()
-        .map(|s| s.contains(&id))
-        .unwrap_or(false)
+    CHAT_CANCEL.lock().map(|s| s.contains(&id)).unwrap_or(false)
 }
 
 fn clear_cancel(id: u64) {
@@ -120,6 +117,38 @@ pub async fn chat_stream(
 
         if messages.is_empty() {
             return Err("No messages to send.".to_string());
+        }
+
+        // Prefer the sidecar (32k, crash-isolated) when it's healthy. v1 is non-streaming: one clean answer,
+        // emitted as `chat-done`. `enable_thinking` follows the `/no_think` marker the frontend appends when the
+        // Reason toggle is off; reasoning (if any) is re-wrapped as `<think>…</think>` so the UI parses it as
+        // usual. Only if the sidecar isn't up do we fall through to the in-process path below.
+        if let Some(url) = crate::dotflow::llm::sidecar_base_url(&app) {
+            clear_cancel(id);
+            let enable_thinking = !messages.iter().any(|m| m.content.contains("/no_think"));
+            let msgs: Vec<(String, String)> = messages
+                .iter()
+                .map(|m| (m.role.clone(), m.content.clone()))
+                .collect();
+            let res =
+                crate::dotflow::sidecar::complete(&url, msgs, 8192, enable_thinking, true).await;
+            clear_cancel(id);
+            return match res {
+                Ok(text) => {
+                    let _ = app.emit("chat-done", ChatDoneEvent { id, text });
+                    Ok(())
+                }
+                Err(e) => {
+                    let _ = app.emit(
+                        "chat-error",
+                        ChatErrorEvent {
+                            id,
+                            message: e.clone(),
+                        },
+                    );
+                    Err(e)
+                }
+            };
         }
 
         let settings = crate::settings::get_settings(&app);

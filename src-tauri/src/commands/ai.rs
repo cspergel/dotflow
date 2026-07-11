@@ -112,8 +112,9 @@ async fn run_transform(app: &AppHandle, system_base: &str, text: &str) -> Result
                 // cutoff strips to empty). The generator's context caps generation to the room after the
                 // prompt, so a generous value here can't overflow — it only stops early on EOS.
                 let max_new = (text.chars().count() / 4 * 2 + 2048).clamp(2048, 8192);
+                let app = app.clone();
                 let out = tauri::async_runtime::spawn_blocking(move || {
-                    crate::dotflow::local_llm::generate_chat(&model_path, &system, &text, max_new)
+                    crate::dotflow::llm::generate_chat(&app, &model_path, &system, &text, max_new)
                 })
                 .await
                 .map_err(|e| format!("local generate task failed: {e}"))?;

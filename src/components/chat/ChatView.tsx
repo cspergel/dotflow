@@ -25,9 +25,16 @@ import {
   FileText,
   X,
   Loader2,
+  Zap,
+  AlertTriangle,
 } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
-import { commands, type LocalModelInfo } from "../../bindings";
+import { toast } from "sonner";
+import {
+  commands,
+  type LocalModelInfo,
+  type BackendStatus,
+} from "../../bindings";
 import { sanitize, parseThinking } from "./chatText";
 import { ChatMarkdown } from "./ChatMarkdown";
 import { useChatDictation } from "./useChatDictation";
@@ -225,6 +232,10 @@ export default function ChatView({ active = true }: { active?: boolean }) {
       return next;
     });
   }, []);
+  // Which LLM backend is answering (sidecar 32k vs in-process 16k fallback) — drives the header badge and a
+  // toast when a fallback happens, so the user always knows which engine (and context size) is in use.
+  const [backend, setBackend] = useState<BackendStatus | null>(null);
+  const prevBackendRef = useRef<BackendStatus | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
 
@@ -232,6 +243,23 @@ export default function ChatView({ active = true }: { active?: boolean }) {
   useEffect(() => {
     saveConversations(conversations);
   }, [conversations]);
+
+  // Seed the backend badge on mount (no toast).
+  useEffect(() => {
+    void commands
+      .sidecarStatus()
+      .then((s) => {
+        prevBackendRef.current = s;
+        setBackend(s);
+      })
+      .catch(() => {});
+  }, []);
+
+  // Lazily start the sidecar when the chat becomes active (idempotent; events drive the badge + toasts).
+  useEffect(() => {
+    if (!active) return;
+    void commands.sidecarEnsureStarted().catch(() => {});
+  }, [active]);
 
   // Slide-out → expand handoff: if the compact quick chat asked to continue here, open that conversation.
   // Runs when the chat becomes active (not just on mount) — ChatView now stays mounted across navigation,
@@ -401,6 +429,28 @@ export default function ChatView({ active = true }: { active?: boolean }) {
     // OCR progress ("Reading page 12 of 105") for a long scanned chart.
     void listen<{ done: number; total: number }>("ocr-progress", (e) => {
       setOcrProgress(e.payload);
+    }).then((u) => unlisten.push(u));
+    // LLM backend status — sidecar (32k) vs in-process (16k). Drives the header badge, and toasts on any
+    // fallback so the user knows their context/reliability changed.
+    void listen<BackendStatus>("llm-backend-status", (e) => {
+      const s = e.payload;
+      const prev = prevBackendRef.current;
+      prevBackendRef.current = s;
+      setBackend(s);
+      if (s.backend === "sidecar" && prev?.backend !== "sidecar") {
+        toast.success("GPU sidecar ready — 32k context, crash-isolated.");
+      } else if (s.backend === "in-process" && prev?.backend === "sidecar") {
+        toast.warning(
+          "AI sidecar stopped — using 16k in-process mode. Long-document summaries may be less complete.",
+        );
+      } else if (
+        prev?.starting &&
+        !s.starting &&
+        s.backend === "in-process" &&
+        /sidecar/i.test(s.reason)
+      ) {
+        toast("Sidecar unavailable — using 16k in-process mode.");
+      }
     }).then((u) => unlisten.push(u));
     return () => unlisten.forEach((u) => u());
   }, []);
@@ -750,6 +800,36 @@ export default function ChatView({ active = true }: { active?: boolean }) {
               <Brain size={13} />
               {t("chat.reason", "Reason")}
             </button>
+            {/* LLM backend badge: sidecar 32k (crash-isolated) vs in-process 16k fallback. */}
+            {backend && (
+              <span
+                title={backend.reason}
+                className={`ml-1 inline-flex items-center gap-1 whitespace-nowrap rounded-md border px-1.5 py-1 text-xs ${
+                  backend.starting
+                    ? "border-neutral-300 text-neutral-500 dark:border-neutral-700"
+                    : backend.backend === "sidecar"
+                      ? "border-emerald-400 bg-emerald-50 text-emerald-700 dark:bg-emerald-900/20 dark:text-emerald-300"
+                      : "border-amber-400 bg-amber-50 text-amber-700 dark:bg-amber-900/20 dark:text-amber-300"
+                }`}
+              >
+                {backend.starting ? (
+                  <Loader2 size={12} className="animate-spin" />
+                ) : backend.backend === "sidecar" ? (
+                  <Zap size={12} />
+                ) : (
+                  <AlertTriangle size={12} />
+                )}
+                {backend.starting
+                  ? t("chat.backendStarting", "Starting AI engine…")
+                  : t("chat.backendBadge", "{{ctx}}k · {{engine}}", {
+                      ctx: Math.round(backend.ctx / 1024),
+                      engine:
+                        backend.backend === "sidecar"
+                          ? t("chat.backendSidecar", "GPU sidecar")
+                          : t("chat.backendInProcess", "in-process"),
+                    })}
+              </span>
+            )}
           </div>
         </div>
 

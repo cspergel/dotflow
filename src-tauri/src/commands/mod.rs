@@ -9,6 +9,7 @@ pub mod history;
 pub mod llm;
 pub mod models;
 pub mod phrases;
+pub mod sidecar;
 pub mod transcription;
 pub mod typed_expander;
 

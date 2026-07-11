@@ -460,6 +460,17 @@ async chatCancel(id: number) : Promise<Result<null, string>> {
 async chatAvailable() : Promise<boolean> {
     return await TAURI_INVOKE("chat_available");
 },
+async sidecarEnsureStarted() : Promise<Result<BackendStatus, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("sidecar_ensure_started") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async sidecarStatus() : Promise<BackendStatus> {
+    return await TAURI_INVOKE("sidecar_status");
+},
 async chatDictateStart() : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("chat_dictate_start") };
@@ -1222,6 +1233,7 @@ export type LLMPrompt = { id: string; name: string; prompt: string }
  */
 export type LlmModelInfo = { id: string; name: string; params: string; size_bytes: number; license: string; commercial_ok: boolean; recommended: boolean; note: string; url: string; filename: string; downloaded: boolean; active: boolean }
 export type LocalModelInfo = { name: string; path: string; size_bytes: number; active: boolean }
+export type BackendStatus = { backend: string; ctx: number; reason: string; starting: boolean }
 export type LogLevel = "trace" | "debug" | "info" | "warn" | "error"
 export type ModelInfo = { id: string; name: string; description: string; filename: string; source: ModelSource; size_mb: number; is_downloaded: boolean; is_downloading: boolean; partial_size: number; is_directory: boolean; engine_type: EngineType; accuracy_score: number; speed_score: number; supports_translation: boolean; is_recommended: boolean; supported_languages: string[]; supports_language_selection: boolean; is_custom: boolean; supports_streaming: boolean; supports_language_detection: boolean }
 export type ModelLoadStatus = { is_loaded: boolean; current_model: string | null }

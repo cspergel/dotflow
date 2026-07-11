@@ -287,13 +287,18 @@ const REDUCE_THRESHOLD: usize = 24_000;
 
 /// MAP one chunk → its extracted facts (reasoning stripped). Blocking (runs the local model).
 #[cfg(feature = "local-llm")]
-fn extract_chunk(model_path: &std::path::Path, chunk: &str) -> Result<String, String> {
+fn extract_chunk(
+    app: &tauri::AppHandle,
+    model_path: &std::path::Path,
+    chunk: &str,
+) -> Result<String, String> {
     // 6144: enough for a dense clinical page's facts, AND enough headroom that a reasoning model which ignores
     // `/no_think` (some Qwythos fine-tunes do) can fit its `<think>` pass AND still emit facts — with too small
     // a budget the think fills the whole budget and strips to empty, so every chunk extracts nothing. A
-    // 22k-char (~7k-token) chunk + 6144 output still fits the engine's 16k context. (A non-reasoning model like
-    // Gemma as the Transforms model is still the fast, reliable choice for extraction.)
-    let out = crate::dotflow::local_llm::generate_chat(
+    // 22k-char (~7k-token) chunk + 6144 output still fits the engine's 16k context. (Routed: the sidecar uses
+    // `enable_thinking:false` for a clean direct extraction; the in-process fallback uses this budget.)
+    let out = crate::dotflow::llm::generate_chat(
+        app,
         model_path,
         EXTRACT_SYSTEM,
         &with_no_think(chunk),
@@ -340,8 +345,13 @@ fn synth_system(instruction: &str) -> String {
 /// user turn. 8192-token budget: a reasoning model that still thinks needs room for the `<think>` pass AND the
 /// answer, or it strips to empty; the context caps generation to the room after the prompt regardless.
 #[cfg(feature = "local-llm")]
-fn synth_once(model: &std::path::Path, system: &str, facts: &str) -> Result<String, String> {
-    let out = crate::dotflow::local_llm::generate_chat(model, system, &with_no_think(facts), 8192)?;
+fn synth_once(
+    app: &tauri::AppHandle,
+    model: &std::path::Path,
+    system: &str,
+    facts: &str,
+) -> Result<String, String> {
+    let out = crate::dotflow::llm::generate_chat(app, model, system, &with_no_think(facts), 8192)?;
     Ok(crate::commands::ai::strip_reasoning(&out)
         .trim()
         .to_string())
@@ -352,6 +362,7 @@ fn synth_once(model: &std::path::Path, system: &str, facts: &str) -> Result<Stri
 /// (the fast non-reasoning extraction model) so a summary is still produced. Blocking.
 #[cfg(feature = "local-llm")]
 fn synthesize(
+    app: &tauri::AppHandle,
     primary: &std::path::Path,
     fallback: &std::path::Path,
     facts: &str,
@@ -359,14 +370,14 @@ fn synthesize(
 ) -> Result<String, String> {
     let system = synth_system(instruction);
 
-    let first = synth_once(primary, &system, facts)?;
+    let first = synth_once(app, primary, &system, facts)?;
     if !first.is_empty() {
         return Ok(first);
     }
     // Primary produced only reasoning (or nothing) → fall back to the non-reasoning model, which reliably
     // emits an answer. Only worth it if the fallback is a different model.
     if fallback != primary {
-        let second = synth_once(fallback, &system, facts)?;
+        let second = synth_once(app, fallback, &system, facts)?;
         if !second.is_empty() {
             return Ok(second);
         }
@@ -383,6 +394,7 @@ fn synthesize(
 /// Blocking — the caller runs it off the async runtime.
 #[cfg(feature = "local-llm")]
 fn run_summary(
+    app: &tauri::AppHandle,
     emit: &dyn Fn(DocSummarizeProgress),
     extract_path: &std::path::Path,
     synth_path: &std::path::Path,
@@ -399,7 +411,7 @@ fn run_summary(
             total: 1,
             stage: "Writing the summary".to_string(),
         });
-        let out = synthesize(synth_path, extract_path, text, instruction)?;
+        let out = synthesize(app, synth_path, extract_path, text, instruction)?;
         emit(DocSummarizeProgress {
             done: 1,
             total: 1,
@@ -416,7 +428,7 @@ fn run_summary(
             total,
             stage: format!("Reading part {} of {}", i + 1, chunks.len()),
         });
-        let e = extract_chunk(extract_path, chunk)?;
+        let e = extract_chunk(app, extract_path, chunk)?;
         if !e.is_empty() {
             extracts.push(e);
         }
@@ -441,6 +453,7 @@ fn run_summary(
     // fails to compress). At the depth cap, synthesize from a truncated set rather than recursing further.
     if combined.len() > REDUCE_THRESHOLD && depth < 2 {
         return run_summary(
+            app,
             emit,
             extract_path,
             synth_path,
@@ -459,7 +472,7 @@ fn run_summary(
         combined
     };
 
-    let out = synthesize(synth_path, extract_path, &facts, instruction)?;
+    let out = synthesize(app, synth_path, extract_path, &facts, instruction)?;
     emit(DocSummarizeProgress {
         done: total,
         total,
@@ -538,7 +551,15 @@ pub async fn summarize_document(
             let emit = |p: DocSummarizeProgress| {
                 let _ = app_emit.emit("doc-summarize-progress", p);
             };
-            run_summary(&emit, &extract_path, &synth_path, &text, &instruction, 0)
+            run_summary(
+                &app_emit,
+                &emit,
+                &extract_path,
+                &synth_path,
+                &text,
+                &instruction,
+                0,
+            )
         })
         .await
         .map_err(|e| format!("summarize task failed: {e}"))?;

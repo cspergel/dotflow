@@ -214,6 +214,10 @@ fn initialize_core_logic(app_handle: &AppHandle) {
     // DotFlow: selection-review overlay context (captured at hotkey fire, consumed by apply/cancel).
     app_handle.manage(ReviewContext(std::sync::Mutex::new(None)));
 
+    // DotFlow: the llama-server sidecar manager (crash-isolated 32k LLM). Starts lazily when the chat opens;
+    // until then (and if the binary/model is absent) everything runs on the in-process fallback.
+    app_handle.manage(dotflow::sidecar::SidecarManager::default());
+
     // DotFlow: the EXPERIMENTAL typed text expander (default OFF). Managed here so the settings toggle can
     // start/stop it live; if the setting is already on from a previous session, start the keyboard monitor
     // now. It emits through the same injection primitives as dictation, so it self-suppresses via the
@@ -705,6 +709,8 @@ pub fn run(cli_args: CliArgs) {
             commands::chat::chat_stream,
             commands::chat::chat_cancel,
             commands::chat::chat_available,
+            commands::sidecar::sidecar_ensure_started,
+            commands::sidecar::sidecar_status,
             commands::chat_dictate::chat_dictate_start,
             commands::chat_dictate::chat_dictate_stop,
             commands::llm::list_llm_models,
@@ -1014,6 +1020,10 @@ pub fn run(cli_args: CliArgs) {
             tauri::RunEvent::Exit => {
                 if let Some(tm) = app.try_state::<Arc<TranscriptionManager>>() {
                     let _ = tm.unload_model();
+                }
+                // Kill the llama-server sidecar so no orphaned process keeps holding VRAM.
+                if let Some(sc) = app.try_state::<dotflow::sidecar::SidecarManager>() {
+                    sc.shutdown();
                 }
             }
             _ => {}
