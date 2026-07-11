@@ -126,7 +126,7 @@ function replaceLastAssistant(msgs: Msg[], text: string, error = false): Msg[] {
  * memory), a full-height message area, and a bottom composer. Streams tokens live via the
  * `chat-token`/`chat-done`/`chat-error` events. Backed by the local GGUF model.
  */
-export default function ChatView() {
+export default function ChatView({ active = true }: { active?: boolean }) {
   const { t } = useTranslation();
   const [conversations, setConversations] = useState<Conversation[]>(() =>
     loadConversations(),
@@ -215,8 +215,11 @@ export default function ChatView() {
     saveConversations(conversations);
   }, [conversations]);
 
-  // Slide-out → expand handoff: if the compact quick chat asked to continue here, open that conversation once.
+  // Slide-out → expand handoff: if the compact quick chat asked to continue here, open that conversation.
+  // Runs when the chat becomes active (not just on mount) — ChatView now stays mounted across navigation,
+  // so the handoff can't rely on a fresh mount; it fires each time the user switches into the chat.
   useEffect(() => {
+    if (!active) return;
     try {
       const openId = localStorage.getItem(OPEN_KEY);
       if (!openId) return;
@@ -229,7 +232,7 @@ export default function ChatView() {
     } catch {
       /* best-effort handoff */
     }
-  }, []);
+  }, [active]);
 
   // One combined document derived from all attached PDFs (null when none). Everything downstream (summarize
   // routing, presets, context gauge, doc-context injection) consumes this single derived value unchanged.

@@ -13,6 +13,7 @@ import AccessibilityPermissions from "./components/AccessibilityPermissions";
 import Footer from "./components/footer";
 import Onboarding, { AccessibilityOnboarding } from "./components/onboarding";
 import { Sidebar, SidebarSection, SECTIONS_CONFIG } from "./components/Sidebar";
+import ChatView from "./components/chat/ChatView";
 import QuickChat from "./components/chat/QuickChat";
 import { OPEN_KEY, QUICK_CONV_KEY } from "./components/chat/chatStore";
 import { TitleBar } from "./components/TitleBar";
@@ -414,11 +415,18 @@ function App() {
         {/* Content area. The chat section renders full-bleed (fills the window, manages its own scroll,
             composer pinned to the bottom); all other sections use the centered, padded, scrollable layout. */}
         <div className="flex-1 flex flex-col overflow-hidden">
-          {currentSection === "chat" ? (
-            <div className="flex-1 min-h-0 overflow-hidden">
-              {renderSettingsContent(currentSection)}
-            </div>
-          ) : (
+          {/* Chat stays MOUNTED (just hidden) when you navigate away, so an in-flight summarize / OCR / chat
+              isn't lost — its result lands when you come back. Other sections mount/unmount normally. */}
+          <div
+            className={
+              currentSection === "chat"
+                ? "flex-1 min-h-0 overflow-hidden"
+                : "hidden"
+            }
+          >
+            <ChatView active={currentSection === "chat"} />
+          </div>
+          {currentSection !== "chat" && (
             <div className="flex-1 overflow-y-auto">
               <div className="flex flex-col items-center px-6 pt-6 pb-10 gap-4">
                 <AccessibilityPermissions />
