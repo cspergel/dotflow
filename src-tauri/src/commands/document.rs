@@ -288,15 +288,16 @@ const REDUCE_THRESHOLD: usize = 24_000;
 /// MAP one chunk → its extracted facts (reasoning stripped). Blocking (runs the local model).
 #[cfg(feature = "local-llm")]
 fn extract_chunk(model_path: &std::path::Path, chunk: &str) -> Result<String, String> {
-    // 4096 (was 2048): a dense clinical page holds more than 2048 tokens of facts, so a small budget TRUNCATED
-    // each chunk's extraction — dropping content and leaving the final summary with an incomplete course. A
-    // 22k-char (~7k-token) chunk + 4096 output still fits the engine's 16k context with margin. Extraction
-    // usually compresses below this, so it only stops early on EOS; it just no longer clips a dense page.
+    // 6144: enough for a dense clinical page's facts, AND enough headroom that a reasoning model which ignores
+    // `/no_think` (some Qwythos fine-tunes do) can fit its `<think>` pass AND still emit facts — with too small
+    // a budget the think fills the whole budget and strips to empty, so every chunk extracts nothing. A
+    // 22k-char (~7k-token) chunk + 6144 output still fits the engine's 16k context. (A non-reasoning model like
+    // Gemma as the Transforms model is still the fast, reliable choice for extraction.)
     let out = crate::dotflow::local_llm::generate_chat(
         model_path,
         EXTRACT_SYSTEM,
         &with_no_think(chunk),
-        4096,
+        6144,
     )?;
     Ok(crate::commands::ai::strip_reasoning(&out)
         .trim()
@@ -421,7 +422,12 @@ fn run_summary(
         }
     }
     if extracts.is_empty() {
-        return Err("Couldn't extract anything to summarize from this document.".to_string());
+        return Err(
+            "Couldn't extract anything from this document. If your chat model is a reasoning model \
+             (e.g. Qwythos), it spent its budget thinking instead of extracting — set a small non-reasoning \
+             model (e.g. Gemma) as the Transforms model in Settings → Text Cleanup, which handles extraction."
+                .to_string(),
+        );
     }
 
     emit(DocSummarizeProgress {
