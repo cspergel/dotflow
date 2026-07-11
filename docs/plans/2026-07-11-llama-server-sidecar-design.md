@@ -110,6 +110,26 @@ Each phase builds → swaps → tests; everything falls back to in-process, so n
 - **Phase 4:** transforms on the sidecar.
 - **Phase 5:** **vision** (`--mmproj` + image attach).
 
+## Phase 0 RESULT (2026-07-11) — smoke test PASSED ✅
+
+Prebuilt `llama-server` (win-cuda) at `C:\Users\drcra\DotFlow-GPU\llama-server\`, run against Qwythos:
+- **Qwythos loads on GPU in ~5s** — the biggest risk (arch support) is CLEARED. `/health` → `{"status":"ok"}`,
+  `/v1/chat/completions` works.
+- **Reasoning control is clean and reliable** (this is the key finding — it fixes the in-process reasoning-burn):
+  - `chat_template_kwargs: {enable_thinking: false}` → **direct answer, zero thinking** (verified: "SIDECAR OK",
+    finish=stop). Use this for **extraction / transforms / summarize-synthesis** → Qwythos is now reliable for
+    ALL roles on the sidecar path; **no Gemma needed** when the sidecar is up.
+  - Default (thinking ON) → llama-server **separates the reasoning into `reasoning_content`** and the clean
+    answer into `content` (verified: content "4", reasoning_content 143 chars). Use for **chat** → clean answer
+    + collapsible reasoning, **no manual `<think>` stripping needed**.
+  - `/no_think` in the message did NOT work (this Qwythos fine-tune ignores it) — use `enable_thinking:false`.
+- **Port 8080 was already in use** on this machine → confirms the auto-free-port choice is necessary.
+- mmproj (vision) file not yet downloaded — fine, Phase 5 only.
+
+**Design refinements from the test:** (a) pass `enable_thinking:false` for extract/synth/transform, omit it (or
+true) for chat; (b) read `content` for the answer and `reasoning_content` for the think — no client-side `<think>`
+parsing on the sidecar path; (c) auto-free-port confirmed required.
+
 ## Risks / assumptions to verify
 
 - **Prebuilt `llama-server` must support Qwythos's architecture + mmproj** — verify in Phase 0 (biggest risk).
