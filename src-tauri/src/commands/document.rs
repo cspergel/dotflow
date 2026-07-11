@@ -320,11 +320,16 @@ fn synth_system(instruction: &str) -> String {
          - Default to a clear, chronological clinical narrative in complete sentences and paragraphs (not a \
          run-on sentence). Cover the FULL course from start to finish, not just the beginning. Use sections or \
          lists only where the request calls for them.\n\
-         - If the request asks for an assessment/problem list: give each problem its own entry; tag it \
-         [Documented] when the record states the diagnosis or [Suspected] when you are inferring it from \
-         evidence; include the supporting EVIDENCE, a brief PLAN, and — only if the request asks for codes — a \
-         SUGGESTED ICD-10 code written as 'ICD-10 (suggested, verify): <code>'. You are not a reliable coder, \
-         so never present a code as authoritative.\n\
+         - If the request asks for an assessment/problem list: be EXHAUSTIVE. Include EVERY problem — the acute \
+         medical diagnoses and complications from the hospital course (e.g. infections, organ dysfunction, \
+         metabolic and neurologic derangements, procedures' indications), the chronic conditions being managed, \
+         AND the functional/therapy problems. List the acute medical problems FIRST, then functional/therapy \
+         ones. Do not stop early or collapse related diagnoses — keep listing until every documented or \
+         clearly-implied problem is covered. Give each problem its own entry; tag it [Documented] when the \
+         record states the diagnosis or [Suspected] when you are inferring it from evidence; include the \
+         supporting EVIDENCE, a brief PLAN, and — only if the request asks for codes — a SUGGESTED ICD-10 code \
+         written as 'ICD-10 (suggested, verify): <code>'. You are not a reliable coder, so never present a code \
+         as authoritative.\n\
          - Output the finished document directly: no preamble, no meta-commentary about your process.\n\n\
          Request: {instruction}"
     )

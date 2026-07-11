@@ -54,6 +54,19 @@ const SYSTEM_PROMPT =
   "You are not a substitute for a licensed professional; briefly suggest consulting one for personal " +
   "decisions, but do NOT refuse to give general information or assistance.";
 
+// One-tap clinical presets for an attached document. Each is a full instruction sent to the summarizer.
+const HPI_PROMPT =
+  "Using only the attached chart, write a comprehensive, chronological History of Present Illness for a " +
+  "skilled nursing facility admission: the reason for admission, the hospital and ICU course, procedures, " +
+  "complications, key treatments and antibiotics, and the current functional, cognitive, and swallowing/diet " +
+  "status at transfer. Complete sentences and paragraphs, covering the whole stay from admission to discharge.";
+const PROBLEM_LIST_PROMPT =
+  "From the attached chart, produce a COMPLETE assessment/problem list for a skilled nursing facility " +
+  "admission. Include EVERY problem: the acute medical diagnoses and complications from the hospital course, " +
+  "the chronic conditions being managed, AND the functional/therapy problems. Do not stop until every " +
+  "documented or clearly-implied problem is listed. For each: the problem name tagged [Documented] or " +
+  "[Suspected]; Evidence (the findings that support it); Plan; and ICD-10 (suggested, verify).";
+
 function appendToLastAssistant(msgs: Msg[], text: string): Msg[] {
   const last = msgs[msgs.length - 1];
   if (!last || last.role !== "assistant") return msgs;
@@ -292,99 +305,103 @@ export default function ChatView() {
     el.style.height = `${Math.min(el.scrollHeight, 140)}px`;
   }, [input]);
 
-  const send = useCallback(async () => {
-    if (streaming) return;
-    // With a document attached, an empty box means "summarize the whole thing".
-    const text =
-      input.trim() ||
-      (attachedDoc
-        ? "Summarize the entire attached document — cover all of its sections and pages, not just the beginning."
-        : "");
-    if (!text) return;
-    let id = activeId;
-    if (!id) {
-      id = newId();
-      setActiveId(id);
-    }
-    const turn = turnIdRef.current + 1;
-    turnIdRef.current = turn;
-    const next: Msg[] = [
-      ...messages,
-      { role: "user", content: text },
-      { role: "assistant", content: "" },
-    ];
-    setMessages(next);
-    setInput("");
-    setStreaming(true);
+  const send = useCallback(
+    async (presetText?: string) => {
+      if (streaming) return;
+      // A preset (one-tap HPI / problem-list) overrides the box; otherwise use what's typed. With a document
+      // attached, an empty box means "summarize the whole thing".
+      const text =
+        (presetText ?? input).trim() ||
+        (attachedDoc
+          ? "Summarize the entire attached document — cover all of its sections and pages, not just the beginning."
+          : "");
+      if (!text) return;
+      let id = activeId;
+      if (!id) {
+        id = newId();
+        setActiveId(id);
+      }
+      const turn = turnIdRef.current + 1;
+      turnIdRef.current = turn;
+      const next: Msg[] = [
+        ...messages,
+        { role: "user", content: text },
+        { role: "assistant", content: "" },
+      ];
+      setMessages(next);
+      if (presetText === undefined) setInput(""); // a preset shouldn't wipe whatever's typed in the box
+      setStreaming(true);
 
-    // A document too large to fit the context window can't be chatted with directly — route it through the
-    // offline map/reduce summarizer, which reads it in parts and never exceeds the stable 16k window. The
-    // user's message becomes the instruction (what to produce, e.g. a comprehensive HPI).
-    const SAFE_CTX_CAP = 16384;
-    if (attachedDoc && usedTokens + 2048 > SAFE_CTX_CAP) {
-      summarizeActiveRef.current = true;
-      // Seed the spinner immediately; the backend's progress events refine the label as it works.
-      setSummarizeProgress({
-        done: 0,
-        total: 0,
-        stage: t("chat.summarizeReading", "Reading the document"),
-      });
-      const res = await commands.summarizeDocument(attachedDoc.text, text);
-      summarizeActiveRef.current = false;
-      setSummarizeProgress(null);
-      if (turn === turnIdRef.current) {
-        if (res.status === "ok") {
-          setMessages((m) => replaceLastAssistant(m, res.data));
-        } else {
-          setMessages((m) => replaceLastAssistant(m, res.error, true));
+      // A document too large to fit the context window can't be chatted with directly — route it through the
+      // offline map/reduce summarizer, which reads it in parts and never exceeds the stable 16k window. The
+      // user's message becomes the instruction (what to produce, e.g. a comprehensive HPI).
+      const SAFE_CTX_CAP = 16384;
+      if (attachedDoc && usedTokens + 2048 > SAFE_CTX_CAP) {
+        summarizeActiveRef.current = true;
+        // Seed the spinner immediately; the backend's progress events refine the label as it works.
+        setSummarizeProgress({
+          done: 0,
+          total: 0,
+          stage: t("chat.summarizeReading", "Reading the document"),
+        });
+        const res = await commands.summarizeDocument(attachedDoc.text, text);
+        summarizeActiveRef.current = false;
+        setSummarizeProgress(null);
+        if (turn === turnIdRef.current) {
+          if (res.status === "ok") {
+            setMessages((m) => replaceLastAssistant(m, res.data));
+          } else {
+            setMessages((m) => replaceLastAssistant(m, res.error, true));
+          }
+          setStreaming(false);
         }
+        return;
+      }
+
+      // Inject the attached document as a context turn (kept out of the visible transcript) so it's available
+      // every turn while attached — enabling follow-up questions about it.
+      const docContext = attachedDoc
+        ? [
+            {
+              role: "user",
+              content: `The user attached a document titled "${attachedDoc.name}". Use it to answer their requests.\n\n<document>\n${attachedDoc.text}\n</document>`,
+            },
+            { role: "assistant", content: "I've read the document." },
+          ]
+        : [];
+      const payload = [
+        { role: "system", content: SYSTEM_PROMPT + reasonSuffix(reason) },
+        ...docContext,
+        ...next.slice(0, -1).map((m) => ({ role: m.role, content: m.content })),
+      ];
+      // When a document is attached it can dwarf the selected context window. Grow the context to fit the doc +
+      // answer, capped at a VRAM-safe 16k (stable fp16 KV). Beyond that we routed to summarize_document above;
+      // here the doc fits, so just grow the window to hold it.
+      let effectiveCtx = ctxTokens;
+      if (attachedDoc) {
+        const needed = usedTokens + 2048; // prompt (incl. doc) + a little answer headroom
+        effectiveCtx = Math.min(
+          Math.max(ctxTokens, Math.ceil(needed / 2048) * 2048),
+          SAFE_CTX_CAP,
+        );
+      }
+      const res = await commands.chatStream(turn, payload, effectiveCtx);
+      if (res.status === "error" && turn === turnIdRef.current) {
+        setMessages((m) => replaceLastAssistant(m, res.error, true));
         setStreaming(false);
       }
-      return;
-    }
-
-    // Inject the attached document as a context turn (kept out of the visible transcript) so it's available
-    // every turn while attached — enabling follow-up questions about it.
-    const docContext = attachedDoc
-      ? [
-          {
-            role: "user",
-            content: `The user attached a document titled "${attachedDoc.name}". Use it to answer their requests.\n\n<document>\n${attachedDoc.text}\n</document>`,
-          },
-          { role: "assistant", content: "I've read the document." },
-        ]
-      : [];
-    const payload = [
-      { role: "system", content: SYSTEM_PROMPT + reasonSuffix(reason) },
-      ...docContext,
-      ...next.slice(0, -1).map((m) => ({ role: m.role, content: m.content })),
-    ];
-    // When a document is attached it can dwarf the selected context window. Grow the context to fit the doc +
-    // answer, capped at a VRAM-safe 16k (stable fp16 KV). Beyond that we routed to summarize_document above;
-    // here the doc fits, so just grow the window to hold it.
-    let effectiveCtx = ctxTokens;
-    if (attachedDoc) {
-      const needed = usedTokens + 2048; // prompt (incl. doc) + a little answer headroom
-      effectiveCtx = Math.min(
-        Math.max(ctxTokens, Math.ceil(needed / 2048) * 2048),
-        SAFE_CTX_CAP,
-      );
-    }
-    const res = await commands.chatStream(turn, payload, effectiveCtx);
-    if (res.status === "error" && turn === turnIdRef.current) {
-      setMessages((m) => replaceLastAssistant(m, res.error, true));
-      setStreaming(false);
-    }
-  }, [
-    input,
-    streaming,
-    messages,
-    activeId,
-    ctxTokens,
-    reason,
-    attachedDoc,
-    usedTokens,
-  ]);
+    },
+    [
+      input,
+      streaming,
+      messages,
+      activeId,
+      ctxTokens,
+      reason,
+      attachedDoc,
+      usedTokens,
+    ],
+  );
 
   const stop = useCallback(async () => {
     await commands.chatCancel(turnIdRef.current);
@@ -724,28 +741,52 @@ export default function ChatView() {
           {(attachedDoc || attachError || scannedPdf) && (
             <div className="mx-auto mb-1.5 max-w-3xl">
               {attachedDoc && (
-                <div className="inline-flex items-center gap-1.5 rounded-lg border border-neutral-300 bg-neutral-100 px-2 py-1 text-xs dark:border-neutral-700 dark:bg-neutral-800">
-                  <FileText size={12} className="text-emerald-600" />
-                  <span
-                    className="max-w-[220px] truncate"
-                    title={attachedDoc.name}
-                  >
-                    {attachedDoc.name}
-                  </span>
-                  <span className="text-neutral-400">
-                    {t("chat.docChars", "· {{n}} chars", {
-                      n: attachedDoc.text.length.toLocaleString(),
-                    })}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => setAttachedDoc(null)}
-                    className="text-neutral-400 hover:text-red-500"
-                    title={t("chat.removeDoc", "Remove")}
-                  >
-                    <X size={12} />
-                  </button>
-                </div>
+                <>
+                  <div className="inline-flex items-center gap-1.5 rounded-lg border border-neutral-300 bg-neutral-100 px-2 py-1 text-xs dark:border-neutral-700 dark:bg-neutral-800">
+                    <FileText size={12} className="text-emerald-600" />
+                    <span
+                      className="max-w-[220px] truncate"
+                      title={attachedDoc.name}
+                    >
+                      {attachedDoc.name}
+                    </span>
+                    <span className="text-neutral-400">
+                      {t("chat.docChars", "· {{n}} chars", {
+                        n: attachedDoc.text.length.toLocaleString(),
+                      })}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setAttachedDoc(null)}
+                      className="text-neutral-400 hover:text-red-500"
+                      title={t("chat.removeDoc", "Remove")}
+                    >
+                      <X size={12} />
+                    </button>
+                  </div>
+                  {/* One-tap clinical presets for the attached document. */}
+                  <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                    <span className="text-[11px] text-neutral-400">
+                      {t("chat.presets", "Quick:")}
+                    </span>
+                    <button
+                      type="button"
+                      disabled={streaming}
+                      onClick={() => void send(HPI_PROMPT)}
+                      className="rounded-md border border-neutral-300 px-2 py-0.5 text-xs text-neutral-600 hover:bg-neutral-100 disabled:opacity-40 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800"
+                    >
+                      {t("chat.presetHpi", "HPI")}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={streaming}
+                      onClick={() => void send(PROBLEM_LIST_PROMPT)}
+                      className="rounded-md border border-neutral-300 px-2 py-0.5 text-xs text-neutral-600 hover:bg-neutral-100 disabled:opacity-40 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800"
+                    >
+                      {t("chat.presetProblems", "Problem list + ICD-10")}
+                    </button>
+                  </div>
+                </>
               )}
               {attachError && (
                 <div className="mt-1 text-xs text-red-500">{attachError}</div>
