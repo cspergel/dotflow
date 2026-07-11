@@ -67,6 +67,49 @@ const PROBLEM_LIST_PROMPT =
   "documented or clearly-implied problem is listed. For each: the problem name tagged [Documented] or " +
   "[Suspected]; Evidence (the findings that support it); Plan; and ICD-10 (suggested, verify).";
 
+// User-defined preset buttons (personal, stored locally). Each is a named one-tap prompt run against the
+// attached document(s) — so a clinician can build their own library (SBAR, med rec, discharge summary, …).
+const PRESETS_KEY = "dotflow.chat.customPresets";
+type CustomPreset = { id: string; label: string; prompt: string };
+function loadCustomPresets(): CustomPreset[] {
+  try {
+    const raw = localStorage.getItem(PRESETS_KEY);
+    if (raw) {
+      const arr = JSON.parse(raw);
+      if (Array.isArray(arr))
+        return arr.filter((p) => p && p.id && p.label && p.prompt);
+    }
+  } catch {
+    /* ignore malformed storage */
+  }
+  return [];
+}
+function saveCustomPresets(presets: CustomPreset[]) {
+  try {
+    localStorage.setItem(PRESETS_KEY, JSON.stringify(presets));
+  } catch {
+    /* best-effort */
+  }
+}
+
+// Merge several read/OCR'd PDFs into ONE document with per-file headers, so the model treats 15 files as a
+// single record (the "combine into one record" mode). Order preserved; the name is the file count when >1.
+function buildCombinedDoc(parts: { name: string; text: string }[]): {
+  name: string;
+  text: string;
+  files: string[];
+} {
+  const files = parts.map((p) => p.name);
+  const text = parts
+    .map((p) => `===== ${p.name} =====\n${p.text}`)
+    .join("\n\n\n");
+  return {
+    name: files.length === 1 ? files[0] : `${files.length} files`,
+    text,
+    files,
+  };
+}
+
 function appendToLastAssistant(msgs: Msg[], text: string): Msg[] {
   const last = msgs[msgs.length - 1];
   if (!last || last.role !== "assistant") return msgs;
@@ -112,17 +155,16 @@ export default function ChatView() {
       return next;
     });
   }, []);
-  // Attached PDF (text-extracted). Held as context and prepended to each send while attached.
-  const [attachedDoc, setAttachedDoc] = useState<{
-    name: string;
-    text: string;
-  } | null>(null);
+  // Attached PDFs, each already read/OCR'd to text — the source of truth. `attachedDoc` below derives one
+  // combined document (with per-file headers) so 15 files become a single record for the model.
+  const [docParts, setDocParts] = useState<{ name: string; text: string }[]>(
+    [],
+  );
   const [attachError, setAttachError] = useState<string | null>(null);
-  // A scanned PDF (no text layer) offered for OCR: {path, name}. Set when read_pdf_text reports "scanned".
-  const [scannedPdf, setScannedPdf] = useState<{
-    path: string;
-    name: string;
-  } | null>(null);
+  // Scanned PDFs (no text layer) awaiting OCR: {path, name}. Populated when read_pdf_text reports "scanned".
+  const [scannedPdfs, setScannedPdfs] = useState<
+    { path: string; name: string }[]
+  >([]);
   const [ocrBusy, setOcrBusy] = useState(false);
   // Live OCR progress ("Reading page 12 of 105") for a long scanned chart; null when not OCR-ing.
   const [ocrProgress, setOcrProgress] = useState<{
@@ -139,6 +181,32 @@ export default function ChatView() {
     total: number;
     stage: string;
   } | null>(null);
+  // Personal, editable preset buttons (persisted to localStorage).
+  const [customPresets, setCustomPresets] =
+    useState<CustomPreset[]>(loadCustomPresets);
+  const [presetEditorOpen, setPresetEditorOpen] = useState(false);
+  const [newPresetLabel, setNewPresetLabel] = useState("");
+  const [newPresetPrompt, setNewPresetPrompt] = useState("");
+  const savePreset = useCallback(() => {
+    const label = newPresetLabel.trim();
+    const prompt = newPresetPrompt.trim();
+    if (!label || !prompt) return;
+    setCustomPresets((prev) => {
+      const next = [...prev, { id: newId(), label, prompt }];
+      saveCustomPresets(next);
+      return next;
+    });
+    setNewPresetLabel("");
+    setNewPresetPrompt("");
+    setPresetEditorOpen(false);
+  }, [newPresetLabel, newPresetPrompt]);
+  const deletePreset = useCallback((id: string) => {
+    setCustomPresets((prev) => {
+      const next = prev.filter((p) => p.id !== id);
+      saveCustomPresets(next);
+      return next;
+    });
+  }, []);
   const scrollRef = useRef<HTMLDivElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
 
@@ -163,6 +231,13 @@ export default function ChatView() {
     }
   }, []);
 
+  // One combined document derived from all attached PDFs (null when none). Everything downstream (summarize
+  // routing, presets, context gauge, doc-context injection) consumes this single derived value unchanged.
+  const attachedDoc = useMemo(
+    () => (docParts.length > 0 ? buildCombinedDoc(docParts) : null),
+    [docParts],
+  );
+
   // Live, approximate context-window usage (system prompt + transcript + attached doc + what's being typed).
   const usedTokens = useMemo(() => {
     let sum = estimateTokens(SYSTEM_PROMPT) + estimateTokens(input);
@@ -172,52 +247,69 @@ export default function ChatView() {
   }, [messages, input, attachedDoc]);
   const ctxPct = Math.min(100, Math.round((usedTokens / ctxTokens) * 100));
 
-  // Attach a PDF: pick it, extract its text locally, hold it as context for the conversation.
+  // Attach one or more PDFs: extract each locally and add its text as a part (combined into one record).
+  // Text-layer PDFs are read immediately; scanned/image PDFs are queued for OCR.
   const attachPdf = useCallback(async () => {
     try {
       const picked = await open({
-        multiple: false,
+        multiple: true,
         filters: [
           { name: "PDF", extensions: ["pdf", "PDF"] },
           { name: "All files", extensions: ["*"] },
         ],
       });
-      if (typeof picked !== "string") return;
+      const paths = Array.isArray(picked)
+        ? picked
+        : typeof picked === "string"
+          ? [picked]
+          : [];
+      if (paths.length === 0) return;
       setAttachError(null);
-      setScannedPdf(null);
-      const name = picked.split(/[\\/]/).pop() || "document.pdf";
-      const res = await commands.readPdfText(picked);
-      if (res.status === "ok") {
-        setAttachedDoc({ name, text: res.data });
-      } else {
-        setAttachError(res.error);
-        // Scanned/image PDF → offer to OCR it instead.
-        if (/scanned/i.test(res.error)) setScannedPdf({ path: picked, name });
+
+      const readParts: { name: string; text: string }[] = [];
+      const scanned: { path: string; name: string }[] = [];
+      let lastErr: string | null = null;
+      for (const path of paths) {
+        const name = path.split(/[\\/]/).pop() || "document.pdf";
+        const res = await commands.readPdfText(path);
+        if (res.status === "ok") {
+          readParts.push({ name, text: res.data });
+        } else if (/scanned/i.test(res.error)) {
+          scanned.push({ path, name });
+        } else {
+          lastErr = res.error;
+        }
       }
+      if (readParts.length > 0) setDocParts((prev) => [...prev, ...readParts]);
+      if (scanned.length > 0) setScannedPdfs((prev) => [...prev, ...scanned]);
+      if (lastErr) setAttachError(lastErr);
     } catch {
       /* dialog cancelled */
     }
   }, []);
 
-  // Run OCR on a scanned PDF (rasterize + read text), then attach the recognized text as the document.
+  // OCR all queued scanned PDFs (one at a time, with progress), adding each recognized text as a doc part.
   const runOcr = useCallback(async () => {
-    if (!scannedPdf || ocrBusy) return;
+    if (scannedPdfs.length === 0 || ocrBusy) return;
     setOcrBusy(true);
     setOcrProgress(null);
     try {
-      const res = await commands.ocrPdf(scannedPdf.path);
-      if (res.status === "ok") {
-        setAttachedDoc({ name: scannedPdf.name, text: res.data });
-        setScannedPdf(null);
-        setAttachError(null);
-      } else {
-        setAttachError(res.error);
+      for (const pdf of scannedPdfs) {
+        const res = await commands.ocrPdf(pdf.path);
+        if (res.status === "ok") {
+          setDocParts((prev) => [...prev, { name: pdf.name, text: res.data }]);
+          setScannedPdfs((prev) => prev.filter((s) => s.path !== pdf.path));
+          setAttachError(null);
+        } else {
+          setAttachError(res.error);
+        }
+        setOcrProgress(null);
       }
     } finally {
       setOcrBusy(false);
       setOcrProgress(null);
     }
-  }, [scannedPdf, ocrBusy]);
+  }, [scannedPdfs, ocrBusy]);
 
   const refreshModels = useCallback(async () => {
     try {
@@ -738,60 +830,140 @@ export default function ChatView() {
 
         {/* Composer */}
         <div className="border-t border-neutral-200 px-4 py-2 dark:border-neutral-800">
-          {(attachedDoc || attachError || scannedPdf) && (
+          {(docParts.length > 0 || attachError || scannedPdfs.length > 0) && (
             <div className="mx-auto mb-1.5 max-w-3xl">
+              {/* Attached files — one chip per file, combined into a single record; remove per file. */}
+              {docParts.length > 0 && (
+                <div className="flex flex-wrap gap-1.5">
+                  {docParts.map((d, i) => (
+                    <div
+                      key={`${d.name}-${i}`}
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-neutral-300 bg-neutral-100 px-2 py-1 text-xs dark:border-neutral-700 dark:bg-neutral-800"
+                    >
+                      <FileText size={12} className="text-emerald-600" />
+                      <span className="max-w-[200px] truncate" title={d.name}>
+                        {d.name}
+                      </span>
+                      <span className="text-neutral-400">
+                        {t("chat.docChars", "· {{n}} chars", {
+                          n: d.text.length.toLocaleString(),
+                        })}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setDocParts((prev) => prev.filter((_, j) => j !== i))
+                        }
+                        className="text-neutral-400 hover:text-red-500"
+                        title={t("chat.removeDoc", "Remove")}
+                      >
+                        <X size={12} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {/* One-tap clinical presets — run against all attached files combined. */}
               {attachedDoc && (
-                <>
-                  <div className="inline-flex items-center gap-1.5 rounded-lg border border-neutral-300 bg-neutral-100 px-2 py-1 text-xs dark:border-neutral-700 dark:bg-neutral-800">
-                    <FileText size={12} className="text-emerald-600" />
-                    <span
-                      className="max-w-[220px] truncate"
-                      title={attachedDoc.name}
-                    >
-                      {attachedDoc.name}
+                <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                  <span className="text-[11px] text-neutral-400">
+                    {t("chat.presets", "Quick:")}
+                  </span>
+                  <button
+                    type="button"
+                    disabled={streaming}
+                    onClick={() => void send(HPI_PROMPT)}
+                    className="rounded-md border border-neutral-300 px-2 py-0.5 text-xs text-neutral-600 hover:bg-neutral-100 disabled:opacity-40 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800"
+                  >
+                    {t("chat.presetHpi", "HPI")}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={streaming}
+                    onClick={() => void send(PROBLEM_LIST_PROMPT)}
+                    className="rounded-md border border-neutral-300 px-2 py-0.5 text-xs text-neutral-600 hover:bg-neutral-100 disabled:opacity-40 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800"
+                  >
+                    {t("chat.presetProblems", "Problem list + ICD-10")}
+                  </button>
+                  {/* User's own saved presets, each with a small delete affordance. */}
+                  {customPresets.map((p) => (
+                    <span key={p.id} className="group inline-flex items-center">
+                      <button
+                        type="button"
+                        disabled={streaming}
+                        onClick={() => void send(p.prompt)}
+                        title={p.prompt}
+                        className="rounded-l-md border border-neutral-300 px-2 py-0.5 text-xs text-neutral-600 hover:bg-neutral-100 disabled:opacity-40 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800"
+                      >
+                        {p.label}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => deletePreset(p.id)}
+                        title={t("chat.presetDelete", "Delete preset")}
+                        className="rounded-r-md border border-l-0 border-neutral-300 px-1 py-0.5 text-neutral-400 hover:bg-neutral-100 hover:text-red-500 dark:border-neutral-700 dark:hover:bg-neutral-800"
+                      >
+                        <X size={11} />
+                      </button>
                     </span>
-                    <span className="text-neutral-400">
-                      {t("chat.docChars", "· {{n}} chars", {
-                        n: attachedDoc.text.length.toLocaleString(),
-                      })}
-                    </span>
+                  ))}
+                  <button
+                    type="button"
+                    onClick={() => setPresetEditorOpen((o) => !o)}
+                    title={t("chat.presetAddTitle", "Save a custom preset")}
+                    className="rounded-md border border-dashed border-neutral-300 px-2 py-0.5 text-xs text-neutral-500 hover:bg-neutral-100 dark:border-neutral-600 dark:hover:bg-neutral-800"
+                  >
+                    {t("chat.presetAdd", "+ Preset")}
+                  </button>
+                </div>
+              )}
+              {/* Inline editor to add a personal preset button. */}
+              {attachedDoc && presetEditorOpen && (
+                <div className="mt-1.5 flex flex-col gap-1.5 rounded-lg border border-neutral-300 bg-neutral-50 p-2 dark:border-neutral-700 dark:bg-neutral-900/40">
+                  <input
+                    value={newPresetLabel}
+                    onChange={(e) => setNewPresetLabel(e.target.value)}
+                    placeholder={t(
+                      "chat.presetLabelPh",
+                      "Button label (e.g. SBAR handoff)",
+                    )}
+                    className="rounded-md border border-neutral-300 bg-transparent px-2 py-1 text-xs outline-none focus:border-emerald-400 dark:border-neutral-700"
+                  />
+                  <textarea
+                    value={newPresetPrompt}
+                    onChange={(e) => setNewPresetPrompt(e.target.value)}
+                    placeholder={t(
+                      "chat.presetPromptPh",
+                      "The prompt to run against the attached document(s)…",
+                    )}
+                    rows={3}
+                    className="resize-none rounded-md border border-neutral-300 bg-transparent px-2 py-1 text-xs outline-none focus:border-emerald-400 dark:border-neutral-700"
+                  />
+                  <div className="flex gap-1.5">
                     <button
                       type="button"
-                      onClick={() => setAttachedDoc(null)}
-                      className="text-neutral-400 hover:text-red-500"
-                      title={t("chat.removeDoc", "Remove")}
+                      onClick={savePreset}
+                      disabled={
+                        !newPresetLabel.trim() || !newPresetPrompt.trim()
+                      }
+                      className="rounded-md bg-emerald-600 px-2.5 py-1 text-xs font-medium text-white disabled:opacity-40"
                     >
-                      <X size={12} />
+                      {t("chat.presetSave", "Save preset")}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setPresetEditorOpen(false)}
+                      className="rounded-md border border-neutral-300 px-2.5 py-1 text-xs text-neutral-600 hover:bg-neutral-100 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800"
+                    >
+                      {t("chat.presetCancel", "Cancel")}
                     </button>
                   </div>
-                  {/* One-tap clinical presets for the attached document. */}
-                  <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-                    <span className="text-[11px] text-neutral-400">
-                      {t("chat.presets", "Quick:")}
-                    </span>
-                    <button
-                      type="button"
-                      disabled={streaming}
-                      onClick={() => void send(HPI_PROMPT)}
-                      className="rounded-md border border-neutral-300 px-2 py-0.5 text-xs text-neutral-600 hover:bg-neutral-100 disabled:opacity-40 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800"
-                    >
-                      {t("chat.presetHpi", "HPI")}
-                    </button>
-                    <button
-                      type="button"
-                      disabled={streaming}
-                      onClick={() => void send(PROBLEM_LIST_PROMPT)}
-                      className="rounded-md border border-neutral-300 px-2 py-0.5 text-xs text-neutral-600 hover:bg-neutral-100 disabled:opacity-40 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800"
-                    >
-                      {t("chat.presetProblems", "Problem list + ICD-10")}
-                    </button>
-                  </div>
-                </>
+                </div>
               )}
               {attachError && (
                 <div className="mt-1 text-xs text-red-500">{attachError}</div>
               )}
-              {scannedPdf && (
+              {scannedPdfs.length > 0 && (
                 <button
                   type="button"
                   onClick={() => void runOcr()}
@@ -813,7 +985,9 @@ export default function ChatView() {
                           "chat.ocrRunning",
                           "Reading pages… (this can take a bit)",
                         )
-                    : t("chat.ocrRun", "Read it with OCR")}
+                    : t("chat.ocrRunN", "Read {{n}} scanned file(s) with OCR", {
+                        n: scannedPdfs.length,
+                      })}
                 </button>
               )}
             </div>
