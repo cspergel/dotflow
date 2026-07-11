@@ -461,12 +461,15 @@ export default function ChatView({ active = true }: { active?: boolean }) {
   }, [messages]);
 
   // Auto-grow the composer textarea from one row up to a cap, so it starts small and matches the slide-out.
+  // Guard against measuring while HIDDEN: ChatView stays mounted across navigation (display:none when not the
+  // active section), and a hidden element reports scrollHeight 0 — which would collapse the box to ~0px and make
+  // it impossible to type into. Skip when hidden, and recompute on `active` so it sizes correctly once shown.
   useEffect(() => {
     const el = taRef.current;
-    if (!el) return;
+    if (!el || el.offsetParent === null) return; // hidden → leave natural height; recompute when shown
     el.style.height = "auto";
     el.style.height = `${Math.min(el.scrollHeight, 140)}px`;
-  }, [input]);
+  }, [input, active]);
 
   const send = useCallback(
     async (presetText?: string) => {
