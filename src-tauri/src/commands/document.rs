@@ -178,11 +178,15 @@ fn chunk_text(text: &str, max_chars: usize) -> Vec<String> {
 /// REDUCE step can synthesize from facts rather than re-reading the raw text. `/no_think` keeps a reasoning
 /// model from burning the budget thinking (its output is stripped either way).
 #[cfg(feature = "local-llm")]
-const EXTRACT_SYSTEM: &str = "You are extracting information from ONE PORTION of a longer document, to be \
-     combined with the other portions later. Faithfully list every fact, finding, event, date, name, \
-     medication (with dose, route, and frequency if stated), diagnosis, lab/imaging result, and instruction \
-     that appears in this portion. Use ONLY what the text states — do not infer, omit, or invent. Preserve \
-     numbers and dates verbatim. Be thorough and specific. Output only the list of facts.\n\n/no_think";
+const EXTRACT_SYSTEM: &str = "You are extracting information from ONE PORTION of a longer clinical document, \
+     to be combined with the other portions later. Faithfully capture EVERYTHING clinically relevant in this \
+     portion, in the order it appears: dates and events (admission, procedures, transfers, consults), the \
+     reason for admission and history of the presenting problem, the hospital course and how things changed \
+     over time, symptoms, exam and mental-status findings, diagnoses/problems, lab and imaging results, \
+     medications (with dose, route, frequency, and start/stop dates if stated), and therapy/functional status. \
+     Use ONLY what the text states — do not infer, summarize away, or invent. Preserve numbers, dates, and \
+     names verbatim. Be thorough — it is better to include a detail than to drop it. Output only the captured \
+     information.\n\n/no_think";
 
 /// Character budget per MAP chunk. ~22k chars ≈ 6–8k tokens for dense clinical text (numbers/abbreviations
 /// tokenize smaller than prose), leaving comfortable room under the engine's 16k context for the extraction
@@ -200,7 +204,11 @@ const REDUCE_THRESHOLD: usize = 24_000;
 /// MAP one chunk → its extracted facts (reasoning stripped). Blocking (runs the local model).
 #[cfg(feature = "local-llm")]
 fn extract_chunk(model_path: &std::path::Path, chunk: &str) -> Result<String, String> {
-    let out = crate::dotflow::local_llm::generate_chat(model_path, EXTRACT_SYSTEM, chunk, 2048)?;
+    // 4096 (was 2048): a dense clinical page holds more than 2048 tokens of facts, so a small budget TRUNCATED
+    // each chunk's extraction — dropping content and leaving the final summary with an incomplete course. A
+    // 22k-char (~7k-token) chunk + 4096 output still fits the engine's 16k context with margin. Extraction
+    // usually compresses below this, so it only stops early on EOS; it just no longer clips a dense page.
+    let out = crate::dotflow::local_llm::generate_chat(model_path, EXTRACT_SYSTEM, chunk, 4096)?;
     Ok(crate::commands::ai::strip_reasoning(&out)
         .trim()
         .to_string())
@@ -214,10 +222,12 @@ fn synthesize(
     instruction: &str,
 ) -> Result<String, String> {
     let system = format!(
-        "You are given FACTS extracted, in order, from every part of a document. Using ONLY these facts — \
-         do not invent, assume, or add anything not present — complete the user's request below. Write a \
-         single coherent result, not a list of the parts. Output the result directly with no preamble and no \
-         explanation of your process.\n\nRequest: {instruction}\n\n/no_think"
+        "You are given clinical FACTS extracted, in order, from every part of a document. Using ONLY these \
+         facts — do not invent, assume, or add anything not present — produce the user's requested document. \
+         Write it as a clear, well-organized clinical narrative in chronological order, in complete sentences \
+         and paragraphs (not a bulleted dump and not one giant run-on sentence). Cover the FULL course from \
+         start to finish, not just the beginning. Output the finished document directly, with no preamble and \
+         no notes about your process.\n\nRequest: {instruction}\n\n/no_think"
     );
     // 8192 (was 4096): a reasoning model (e.g. Qwythos) that ignores `/no_think` spends tokens thinking before
     // the answer; a small budget gets fully consumed by an unclosed <think>, which strips to empty. A bigger
@@ -245,7 +255,8 @@ fn synthesize(
 #[cfg(feature = "local-llm")]
 fn run_summary(
     emit: &dyn Fn(DocSummarizeProgress),
-    model_path: &std::path::Path,
+    extract_path: &std::path::Path,
+    synth_path: &std::path::Path,
     text: &str,
     instruction: &str,
     depth: u32,
@@ -259,7 +270,7 @@ fn run_summary(
             total: 1,
             stage: "Writing the summary".to_string(),
         });
-        let out = synthesize(model_path, text, instruction)?;
+        let out = synthesize(synth_path, text, instruction)?;
         emit(DocSummarizeProgress {
             done: 1,
             total: 1,
@@ -276,7 +287,7 @@ fn run_summary(
             total,
             stage: format!("Reading part {} of {}", i + 1, chunks.len()),
         });
-        let e = extract_chunk(model_path, chunk)?;
+        let e = extract_chunk(extract_path, chunk)?;
         if !e.is_empty() {
             extracts.push(e);
         }
@@ -295,7 +306,14 @@ fn run_summary(
     // Still too large for one synthesis pass → reduce again (bounded, so it can't loop forever if a model
     // fails to compress). At the depth cap, synthesize from a truncated set rather than recursing further.
     if combined.len() > REDUCE_THRESHOLD && depth < 2 {
-        return run_summary(emit, model_path, &combined, instruction, depth + 1);
+        return run_summary(
+            emit,
+            extract_path,
+            synth_path,
+            &combined,
+            instruction,
+            depth + 1,
+        );
     }
     // At the depth cap a still-oversized fact set is truncated (with a note) rather than overflowing the
     // context window — this keeps synthesis from erroring on a pathologically large document.
@@ -307,7 +325,7 @@ fn run_summary(
         combined
     };
 
-    let out = synthesize(model_path, &facts, instruction)?;
+    let out = synthesize(synth_path, &facts, instruction)?;
     emit(DocSummarizeProgress {
         done: total,
         total,
@@ -352,15 +370,33 @@ pub async fn summarize_document(
         };
 
         let settings = crate::settings::get_settings(&app);
-        let model = settings.model_for_task("transform");
-        if model.is_empty() {
+        // MAP (per-chunk fact extraction) is mechanical → use the fast "transform" model (e.g. Gemma) when set.
+        // REDUCE (weaving the facts into a coherent HPI/narrative) needs real capability → use the chat model
+        // (e.g. Qwythos). Each falls back to the other so a single configured model still works.
+        let transform_model = settings.model_for_task("transform");
+        let chat_model = settings.local_llm_model_path.trim().to_string();
+        let extract_model = if transform_model.is_empty() {
+            chat_model.clone()
+        } else {
+            transform_model
+        };
+        let synth_model = if chat_model.is_empty() {
+            extract_model.clone()
+        } else {
+            chat_model
+        };
+        if extract_model.is_empty() {
             return Err(
                 "No local model selected — pick one in the chat model dropdown.".to_string(),
             );
         }
-        let model_path = std::path::PathBuf::from(&model);
-        if !model_path.exists() {
-            return Err(format!("Model file not found: {model}"));
+        let extract_path = std::path::PathBuf::from(&extract_model);
+        let synth_path = std::path::PathBuf::from(&synth_model);
+        if !extract_path.exists() {
+            return Err(format!("Model file not found: {extract_model}"));
+        }
+        if !synth_path.exists() {
+            return Err(format!("Model file not found: {synth_model}"));
         }
 
         let app_emit = app.clone();
@@ -368,7 +404,7 @@ pub async fn summarize_document(
             let emit = |p: DocSummarizeProgress| {
                 let _ = app_emit.emit("doc-summarize-progress", p);
             };
-            run_summary(&emit, &model_path, &text, &instruction, 0)
+            run_summary(&emit, &extract_path, &synth_path, &text, &instruction, 0)
         })
         .await
         .map_err(|e| format!("summarize task failed: {e}"))?;
