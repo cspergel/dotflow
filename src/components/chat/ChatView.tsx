@@ -967,31 +967,56 @@ export default function ChatView({ active = true }: { active?: boolean }) {
                 <div className="mt-1 text-xs text-red-500">{attachError}</div>
               )}
               {scannedPdfs.length > 0 && (
-                <button
-                  type="button"
-                  onClick={() => void runOcr()}
-                  disabled={ocrBusy}
-                  className="mt-1.5 inline-flex items-center gap-1.5 rounded-lg border border-emerald-400 bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700 hover:bg-emerald-100 disabled:opacity-60 dark:bg-emerald-900/20 dark:text-emerald-300"
-                >
-                  <FileText size={12} />
-                  {ocrBusy
-                    ? ocrProgress && ocrProgress.total > 0
-                      ? t(
-                          "chat.ocrPage",
-                          "Reading page {{done}} of {{total}}…",
-                          {
-                            done: ocrProgress.done + 1,
-                            total: ocrProgress.total,
-                          },
-                        )
+                <div className="mt-1.5 flex flex-col gap-1.5">
+                  {/* Amber = attached but NOT usable yet — these scanned files must be OCR'd first. */}
+                  <div className="flex flex-wrap gap-1.5">
+                    {scannedPdfs.map((s, i) => (
+                      <div
+                        key={`${s.path}-${i}`}
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-amber-400 bg-amber-50 px-2 py-1 text-xs text-amber-700 dark:border-amber-500/60 dark:bg-amber-900/20 dark:text-amber-300"
+                      >
+                        <FileText size={12} />
+                        <span className="max-w-[200px] truncate" title={s.name}>
+                          {s.name}
+                        </span>
+                        <span className="opacity-70">
+                          {t("chat.notReadYet", "· scanned, not read yet")}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void runOcr()}
+                    disabled={ocrBusy}
+                    className="inline-flex w-fit items-center gap-1.5 rounded-lg border border-amber-400 bg-amber-100 px-2.5 py-1 text-xs font-medium text-amber-800 hover:bg-amber-200 disabled:opacity-70 dark:border-amber-500/60 dark:bg-amber-900/30 dark:text-amber-200"
+                  >
+                    {ocrBusy ? (
+                      <Loader2 size={13} className="animate-spin" />
+                    ) : (
+                      <FileText size={12} />
+                    )}
+                    {ocrBusy
+                      ? ocrProgress && ocrProgress.total > 0
+                        ? t(
+                            "chat.ocrPage",
+                            "Reading page {{done}} of {{total}}…",
+                            {
+                              done: ocrProgress.done + 1,
+                              total: ocrProgress.total,
+                            },
+                          )
+                        : t(
+                            "chat.ocrRunning",
+                            "Reading pages… (this can take a bit)",
+                          )
                       : t(
-                          "chat.ocrRunning",
-                          "Reading pages… (this can take a bit)",
-                        )
-                    : t("chat.ocrRunN", "Read {{n}} scanned file(s) with OCR", {
-                        n: scannedPdfs.length,
-                      })}
-                </button>
+                          "chat.ocrRunN",
+                          "Read {{n}} scanned file(s) with OCR",
+                          { n: scannedPdfs.length },
+                        )}
+                  </button>
+                </div>
               )}
             </div>
           )}

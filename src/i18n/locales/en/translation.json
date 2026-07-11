@@ -60,6 +60,7 @@
     "presetSave": "Save preset",
     "presetCancel": "Cancel",
     "ocrRunN": "Read {{n}} scanned file(s) with OCR",
+    "notReadYet": "· scanned, not read yet",
     "empty": "Ask your offline model anything.",
     "placeholder": "Ask anything…  (Enter to send, Shift+Enter for newline)",
     "send": "Send",
