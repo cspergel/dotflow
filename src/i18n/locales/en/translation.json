@@ -48,6 +48,7 @@
     "reasoning": "Reasoning",
     "thinking": "Thinking…",
     "summarizeReading": "Reading the document",
+    "ocrPage": "Reading page {{done}} of {{total}}…",
     "empty": "Ask your offline model anything.",
     "placeholder": "Ask anything…  (Enter to send, Shift+Enter for newline)",
     "send": "Send",

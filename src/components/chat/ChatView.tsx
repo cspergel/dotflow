@@ -111,6 +111,11 @@ export default function ChatView() {
     name: string;
   } | null>(null);
   const [ocrBusy, setOcrBusy] = useState(false);
+  // Live OCR progress ("Reading page 12 of 105") for a long scanned chart; null when not OCR-ing.
+  const [ocrProgress, setOcrProgress] = useState<{
+    done: number;
+    total: number;
+  } | null>(null);
   const turnIdRef = useRef(0);
   // True while a big-document map/reduce summary is running, so the `doc-summarize-progress` listener knows to
   // update the progress state (and normal chat streams don't).
@@ -185,6 +190,7 @@ export default function ChatView() {
   const runOcr = useCallback(async () => {
     if (!scannedPdf || ocrBusy) return;
     setOcrBusy(true);
+    setOcrProgress(null);
     try {
       const res = await commands.ocrPdf(scannedPdf.path);
       if (res.status === "ok") {
@@ -196,6 +202,7 @@ export default function ChatView() {
       }
     } finally {
       setOcrBusy(false);
+      setOcrProgress(null);
     }
   }, [scannedPdf, ocrBusy]);
 
@@ -265,6 +272,10 @@ export default function ChatView() {
         setSummarizeProgress(e.payload);
       },
     ).then((u) => unlisten.push(u));
+    // OCR progress ("Reading page 12 of 105") for a long scanned chart.
+    void listen<{ done: number; total: number }>("ocr-progress", (e) => {
+      setOcrProgress(e.payload);
+    }).then((u) => unlisten.push(u));
     return () => unlisten.forEach((u) => u());
   }, []);
 
@@ -748,10 +759,19 @@ export default function ChatView() {
                 >
                   <FileText size={12} />
                   {ocrBusy
-                    ? t(
-                        "chat.ocrRunning",
-                        "Reading pages… (this can take a bit)",
-                      )
+                    ? ocrProgress && ocrProgress.total > 0
+                      ? t(
+                          "chat.ocrPage",
+                          "Reading page {{done}} of {{total}}…",
+                          {
+                            done: ocrProgress.done + 1,
+                            total: ocrProgress.total,
+                          },
+                        )
+                      : t(
+                          "chat.ocrRunning",
+                          "Reading pages… (this can take a bit)",
+                        )
                     : t("chat.ocrRun", "Read it with OCR")}
                 </button>
               )}

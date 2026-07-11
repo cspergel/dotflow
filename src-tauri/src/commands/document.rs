@@ -22,19 +22,95 @@ struct DocSummarizeProgress {
     stage: String,
 }
 
-/// OCR a (scanned) PDF: rasterize each page via pdfium, then read text off each with the ocrs engine, and
-/// return the concatenated text. CPU-bound (render + OCR) so it runs off the async runtime. Returns a clear
-/// error if the OCR models aren't installed. The trimmed result is empty-checked by the caller.
+/// Progress for a running [`ocr_pdf`], emitted as `ocr-progress` so the chat can show "Reading page 12 of 105"
+/// during a long scan. Plain `Serialize`, listened to ad-hoc by the frontend (same as the summarize events).
+#[derive(Clone, serde::Serialize)]
+struct OcrProgress {
+    done: u32,
+    total: u32,
+}
+
+/// OCR a (scanned) PDF: rasterize each page via pdfium, read text off each, and return the concatenated text.
+/// Prefers **Tesseract** (dramatically cleaner on faxed/scanned clinical pages — it read drug names correctly
+/// that the bundled `ocrs` engine garbled) and falls back to `ocrs` when Tesseract isn't installed. Streams
+/// page-by-page so a 100+ page chart can't exhaust memory, emits `ocr-progress`, and is page-tolerant (a page
+/// that fails to read is skipped, not fatal). CPU-bound, so it runs off the async runtime.
 #[tauri::command]
 #[specta::specta]
-pub async fn ocr_pdf(path: String) -> Result<String, String> {
+pub async fn ocr_pdf(app: tauri::AppHandle, path: String) -> Result<String, String> {
+    use tauri::Emitter;
+
     let p = std::path::PathBuf::from(path.trim());
     if !p.exists() {
         return Err(format!("File not found: {}", p.display()));
     }
+    let app_emit = app.clone();
     let text = tauri::async_runtime::spawn_blocking(move || -> Result<String, String> {
-        let images = crate::dotflow::pdf_render::render_pages(&p, 1600)?;
-        crate::dotflow::ocr::ocr_pages(&images)
+        let tess = crate::dotflow::ocr::find_tesseract();
+        // Render wider for Tesseract (it wants ~300 DPI); the ocrs engine was tuned around 1600px.
+        let target_width: u16 = if tess.is_some() { 2400 } else { 1600 };
+        // Build the ocrs engine once, and only when Tesseract isn't available (loading it is expensive).
+        let engine = if tess.is_none() {
+            Some(crate::dotflow::ocr::load_engine()?)
+        } else {
+            None
+        };
+        let pid = std::process::id();
+
+        let pages = crate::dotflow::pdf_render::for_each_page(
+            &p,
+            target_width,
+            crate::dotflow::pdf_render::MAX_PAGES,
+            |i, total, img| {
+                let _ = app_emit.emit(
+                    "ocr-progress",
+                    OcrProgress {
+                        done: i as u32,
+                        total: total as u32,
+                    },
+                );
+                let r = match (&tess, &engine) {
+                    (Some(t), _) => {
+                        crate::dotflow::ocr::ocr_image_tesseract(t, &img, &format!("{pid}_{i}"))
+                    }
+                    (None, Some(e)) => crate::dotflow::ocr::ocr_image(e, &img),
+                    (None, None) => Err("no OCR engine available".to_string()),
+                };
+                match r {
+                    Ok(s) => s,
+                    Err(e) => {
+                        log::warn!("OCR: skipped page {} of {}: {e}", i + 1, total);
+                        String::new()
+                    }
+                }
+            },
+        )?;
+
+        let ok = pages.iter().filter(|s| !s.trim().is_empty()).count();
+        if ok == 0 {
+            return Err("OCR couldn't read any text from this document.".to_string());
+        }
+        let mut joined = pages
+            .iter()
+            .filter(|s| !s.trim().is_empty())
+            .map(|s| s.trim())
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        let skipped = pages.len() - ok;
+        if skipped > 0 {
+            joined.push_str(&format!(
+                "\n\n[Note: {skipped} of {} page(s) couldn't be read and were skipped.]",
+                pages.len()
+            ));
+        }
+        let _ = app_emit.emit(
+            "ocr-progress",
+            OcrProgress {
+                done: pages.len() as u32,
+                total: pages.len() as u32,
+            },
+        );
+        Ok(joined)
     })
     .await
     .map_err(|e| format!("OCR task failed: {e}"))??;
@@ -175,8 +251,8 @@ fn chunk_text(text: &str, max_chars: usize) -> Vec<String> {
 }
 
 /// The SYSTEM prompt for the MAP step: pull every fact out of ONE portion of the document, faithfully, so the
-/// REDUCE step can synthesize from facts rather than re-reading the raw text. `/no_think` keeps a reasoning
-/// model from burning the budget thinking (its output is stripped either way).
+/// REDUCE step can synthesize from facts rather than re-reading the raw text. (`/no_think` is appended to the
+/// USER turn, not here — reasoning models like Qwen3/Qwythos only honor the switch in the last user message.)
 #[cfg(feature = "local-llm")]
 const EXTRACT_SYSTEM: &str = "You are extracting information from ONE PORTION of a longer clinical document, \
      to be combined with the other portions later. Faithfully capture EVERYTHING clinically relevant in this \
@@ -186,7 +262,15 @@ const EXTRACT_SYSTEM: &str = "You are extracting information from ONE PORTION of
      medications (with dose, route, frequency, and start/stop dates if stated), and therapy/functional status. \
      Use ONLY what the text states — do not infer, summarize away, or invent. Preserve numbers, dates, and \
      names verbatim. Be thorough — it is better to include a detail than to drop it. Output only the captured \
-     information.\n\n/no_think";
+     information.";
+
+/// Append `/no_think` to a reasoning model's USER turn so it answers directly instead of emitting a `<think>`
+/// pass. Qwen3/Qwythos only honor the switch in the last user message (not the system prompt) — putting it in
+/// the system prompt was why Qwythos burned its whole budget thinking and returned an empty summary.
+#[cfg(feature = "local-llm")]
+fn with_no_think(user: &str) -> String {
+    format!("{user}\n\n/no_think")
+}
 
 /// Character budget per MAP chunk. ~22k chars ≈ 6–8k tokens for dense clinical text (numbers/abbreviations
 /// tokenize smaller than prose), leaving comfortable room under the engine's 16k context for the extraction
@@ -208,45 +292,84 @@ fn extract_chunk(model_path: &std::path::Path, chunk: &str) -> Result<String, St
     // each chunk's extraction — dropping content and leaving the final summary with an incomplete course. A
     // 22k-char (~7k-token) chunk + 4096 output still fits the engine's 16k context with margin. Extraction
     // usually compresses below this, so it only stops early on EOS; it just no longer clips a dense page.
-    let out = crate::dotflow::local_llm::generate_chat(model_path, EXTRACT_SYSTEM, chunk, 4096)?;
+    let out = crate::dotflow::local_llm::generate_chat(
+        model_path,
+        EXTRACT_SYSTEM,
+        &with_no_think(chunk),
+        4096,
+    )?;
     Ok(crate::commands::ai::strip_reasoning(&out)
         .trim()
         .to_string())
 }
 
-/// REDUCE: synthesize the ordered `facts` into the user's requested output (`instruction`). Blocking.
+/// The clinical SYSTEM prompt for the REDUCE step. Grounds output in the facts, honors the user's requested
+/// format (a narrative HPI, a problem/assessment list, etc.), and — when an assessment list is requested —
+/// labels each problem Documented vs. Suspected, cites evidence, gives a plan, and flags any ICD-10 code as
+/// AI-suggested-verify (a local model is NOT a reliable coder). `{instruction}` is the user's request.
+#[cfg(feature = "local-llm")]
+fn synth_system(instruction: &str) -> String {
+    format!(
+        "You are an expert clinical documentation assistant. You are given clinical FACTS extracted, in order, \
+         from every part of a patient's record. Produce the document the user requests below, grounded ONLY in \
+         these facts.\n\n\
+         Rules:\n\
+         - Use only what the facts support. Do NOT invent findings, values, medications, diagnoses, or dates. \
+         If something the request needs is not in the facts, state that it is not documented rather than \
+         guessing.\n\
+         - Default to a clear, chronological clinical narrative in complete sentences and paragraphs (not a \
+         run-on sentence). Cover the FULL course from start to finish, not just the beginning. Use sections or \
+         lists only where the request calls for them.\n\
+         - If the request asks for an assessment/problem list: give each problem its own entry; tag it \
+         [Documented] when the record states the diagnosis or [Suspected] when you are inferring it from \
+         evidence; include the supporting EVIDENCE, a brief PLAN, and — only if the request asks for codes — a \
+         SUGGESTED ICD-10 code written as 'ICD-10 (suggested, verify): <code>'. You are not a reliable coder, \
+         so never present a code as authoritative.\n\
+         - Output the finished document directly: no preamble, no meta-commentary about your process.\n\n\
+         Request: {instruction}"
+    )
+}
+
+/// Run one REDUCE pass on `model`, returning the cleaned (reasoning-stripped) output. `/no_think` rides the
+/// user turn. 8192-token budget: a reasoning model that still thinks needs room for the `<think>` pass AND the
+/// answer, or it strips to empty; the context caps generation to the room after the prompt regardless.
+#[cfg(feature = "local-llm")]
+fn synth_once(model: &std::path::Path, system: &str, facts: &str) -> Result<String, String> {
+    let out = crate::dotflow::local_llm::generate_chat(model, system, &with_no_think(facts), 8192)?;
+    Ok(crate::commands::ai::strip_reasoning(&out)
+        .trim()
+        .to_string())
+}
+
+/// REDUCE: synthesize the ordered `facts` into the user's requested output. Tries `primary` (the capable chat
+/// model — better clinical narrative) first; if it returns only reasoning / nothing, falls back to `fallback`
+/// (the fast non-reasoning extraction model) so a summary is still produced. Blocking.
 #[cfg(feature = "local-llm")]
 fn synthesize(
-    model_path: &std::path::Path,
+    primary: &std::path::Path,
+    fallback: &std::path::Path,
     facts: &str,
     instruction: &str,
 ) -> Result<String, String> {
-    let system = format!(
-        "You are given clinical FACTS extracted, in order, from every part of a document. Using ONLY these \
-         facts — do not invent, assume, or add anything not present — produce the user's requested document. \
-         Write it as a clear, well-organized clinical narrative in chronological order, in complete sentences \
-         and paragraphs (not a bulleted dump and not one giant run-on sentence). Cover the FULL course from \
-         start to finish, not just the beginning. Output the finished document directly, with no preamble and \
-         no notes about your process.\n\nRequest: {instruction}\n\n/no_think"
-    );
-    // 8192 (was 4096): a reasoning model (e.g. Qwythos) that ignores `/no_think` spends tokens thinking before
-    // the answer; a small budget gets fully consumed by an unclosed <think>, which strips to empty. A bigger
-    // budget lets the reasoning pass AND the answer fit. The context caps generation to the room after the
-    // prompt anyway, so this only stops early on EOS. (A non-reasoning transform model like Gemma is still the
-    // fast, reliable choice — see the empty-result guidance below.)
-    let out = crate::dotflow::local_llm::generate_chat(model_path, &system, facts, 8192)?;
-    let cleaned = crate::commands::ai::strip_reasoning(&out)
-        .trim()
-        .to_string();
-    if cleaned.is_empty() {
-        return Err(
-            "The model produced only reasoning and no summary. This happens with reasoning models \
-             (e.g. Qwythos) on long documents. Set a small non-reasoning model (e.g. Gemma) as the \
-             Transforms model in Settings → Text Cleanup — it's faster and reliable for summaries."
-                .to_string(),
-        );
+    let system = synth_system(instruction);
+
+    let first = synth_once(primary, &system, facts)?;
+    if !first.is_empty() {
+        return Ok(first);
     }
-    Ok(cleaned)
+    // Primary produced only reasoning (or nothing) → fall back to the non-reasoning model, which reliably
+    // emits an answer. Only worth it if the fallback is a different model.
+    if fallback != primary {
+        let second = synth_once(fallback, &system, facts)?;
+        if !second.is_empty() {
+            return Ok(second);
+        }
+    }
+    Err(
+        "The model produced only reasoning and no summary. Pick a small non-reasoning model (e.g. Gemma) \
+         as the chat model, or set it as the Transforms model in Settings → Text Cleanup."
+            .to_string(),
+    )
 }
 
 /// The map/reduce core: chunk `text`, MAP each chunk to facts (emitting progress), REDUCE facts to the final
@@ -270,7 +393,7 @@ fn run_summary(
             total: 1,
             stage: "Writing the summary".to_string(),
         });
-        let out = synthesize(synth_path, text, instruction)?;
+        let out = synthesize(synth_path, extract_path, text, instruction)?;
         emit(DocSummarizeProgress {
             done: 1,
             total: 1,
@@ -325,7 +448,7 @@ fn run_summary(
         combined
     };
 
-    let out = synthesize(synth_path, &facts, instruction)?;
+    let out = synthesize(synth_path, extract_path, &facts, instruction)?;
     emit(DocSummarizeProgress {
         done: total,
         total,
