@@ -66,6 +66,24 @@ const PROBLEM_LIST_PROMPT =
   "the chronic conditions being managed, AND the functional/therapy problems. Do not stop until every " +
   "documented or clearly-implied problem is listed. For each: the problem name tagged [Documented] or " +
   "[Suspected]; Evidence (the findings that support it); Plan; and ICD-10 (suggested, verify).";
+const HOSPITAL_COURSE_PROMPT =
+  "From the attached chart, write a concise CHRONOLOGICAL summary of the acute hospital course: the reason " +
+  "for admission and presentation, the diagnoses, the ICU course and key events/procedures WITH THEIR DATES, " +
+  "complications, and the patient's status at the end of the stay. Use only the chart; keep dates verbatim.";
+const MEDS_PROMPT =
+  "From the attached chart, list the patient's current/active medications. For EACH: name, dose, route, and " +
+  "frequency, AND its indication (what it is for). EMPHASIZE new or recently changed medications from this " +
+  "hospitalization, and note anything recently started or stopped. List chronic/home medications more briefly. " +
+  "Use only the chart — if an indication is not documented, say 'indication not documented' rather than guessing.";
+const THERAPY_PROMPT =
+  "From the attached chart, summarize the rehabilitation/therapy status in three sections: Physical Therapy " +
+  "(mobility, gait, transfers, assist levels, assistive devices, rehab potential), Occupational Therapy " +
+  "(ADLs/self-care), and Speech Therapy (cognitive-communication and swallowing/diet). Include assist levels " +
+  "and therapy recommendations. Use only the chart.";
+const TIMELINE_PROMPT =
+  "From the attached chart, extract EVERY dated event as a chronological timeline: admission, procedures (e.g. " +
+  "ERCP), antibiotic starts/stops, consults, transfers, and key labs/results. Give the date for each, kept " +
+  "VERBATIM from the chart so dates can be checked for consistency. Use only the chart.";
 
 // User-defined preset buttons (personal, stored locally). Each is a named one-tap prompt run against the
 // attached document(s) — so a clinician can build their own library (SBAR, med rec, discharge summary, …).
@@ -887,6 +905,38 @@ export default function ChatView({ active = true }: { active?: boolean }) {
                     className="rounded-md border border-neutral-300 px-2 py-0.5 text-xs text-neutral-600 hover:bg-neutral-100 disabled:opacity-40 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800"
                   >
                     {t("chat.presetProblems", "Problem list + ICD-10")}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={streaming}
+                    onClick={() => void send(HOSPITAL_COURSE_PROMPT)}
+                    className="rounded-md border border-neutral-300 px-2 py-0.5 text-xs text-neutral-600 hover:bg-neutral-100 disabled:opacity-40 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800"
+                  >
+                    {t("chat.presetCourse", "Hospital course")}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={streaming}
+                    onClick={() => void send(MEDS_PROMPT)}
+                    className="rounded-md border border-neutral-300 px-2 py-0.5 text-xs text-neutral-600 hover:bg-neutral-100 disabled:opacity-40 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800"
+                  >
+                    {t("chat.presetMeds", "Meds + indications")}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={streaming}
+                    onClick={() => void send(THERAPY_PROMPT)}
+                    className="rounded-md border border-neutral-300 px-2 py-0.5 text-xs text-neutral-600 hover:bg-neutral-100 disabled:opacity-40 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800"
+                  >
+                    {t("chat.presetTherapy", "Therapy (PT/OT/ST)")}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={streaming}
+                    onClick={() => void send(TIMELINE_PROMPT)}
+                    className="rounded-md border border-neutral-300 px-2 py-0.5 text-xs text-neutral-600 hover:bg-neutral-100 disabled:opacity-40 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800"
+                  >
+                    {t("chat.presetTimeline", "Timeline / dates")}
                   </button>
                   {/* User's own saved presets, each with a small delete affordance. */}
                   {customPresets.map((p) => (
